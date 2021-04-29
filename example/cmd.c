@@ -10,7 +10,7 @@
 #include <stdio.h>
 
 
-int cb(const cli_result* result)
+int cb(const cli_command_result* command)
 {
     printf("Hey!");
     return 0;

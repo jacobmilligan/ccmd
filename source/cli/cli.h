@@ -26,6 +26,9 @@
 #define CLI_DEFINE_ARRAY(T) struct T; typedef struct T##_array { int count; const struct T* data; } T##_array;
 
 struct cli_result;
+struct cli_command_result;
+
+typedef int(*cli_command_callback)(const struct cli_command_result* command);
 
 typedef struct cli_positional
 {
@@ -46,15 +49,13 @@ CLI_DEFINE_ARRAY(cli_positional)
 CLI_DEFINE_ARRAY(cli_option)
 CLI_DEFINE_ARRAY(cli_command)
 
-typedef int(*cli_command_callback)(const struct cli_result*);
-
 typedef struct cli_command
 {
-    const char*             name;
-    cli_positional_array    positionals;
-    cli_option_array        options;
-    cli_command_array       subcommands;
-    cli_command_callback    execute;
+    const char*                 name;
+    cli_positional_array        positionals;
+    cli_option_array            options;
+    cli_command_array           subcommands;
+    const cli_command_callback  execute;
 } cli_command;
 
 typedef struct cli_parsed_option
@@ -66,30 +67,32 @@ typedef struct cli_parsed_option
 
 typedef struct cli_command_result
 {
-    int                             argc;
-    char* const*                    argv;
-    int                             nargs_parsed;
-    int                             positionals_parsed;
-    int                             options_parsed;
+    int                                 argc;
+    char* const*                        argv;
+    int                                 nargs_parsed;
+    int                                 positionals_parsed;
+    int                                 options_parsed;
 
-    char                            usage[CLI_HELP_MAX];
+    char                                usage[CLI_HELP_MAX];
 
-    const char*                     positionals[CLI_ARG_MAX];
-    cli_parsed_option               options[CLI_ARG_MAX];
-    struct cli_command_result*    subcommand;
+    const char*                         positionals[CLI_ARG_MAX];
+    cli_parsed_option                   options[CLI_ARG_MAX];
+    cli_command_callback                execute;
+    const struct cli_command_result*    subcommand;
 } cli_command_result;
 
 typedef struct cli_result
 {
     const char*             program_name;
+    const char*             usage;
     char                    error_message[CLI_ERROR_MAX];
 
     bool                    is_error;
     bool                    is_help;
 
     int                     commands_count;
+    int                     executed_command;
     cli_command_result      commands[CLI_ARG_MAX];
-    cli_command_callback    execute;
 } cli_result;
 
 void cli_parse(const int argc, char* const* argv, cli_result* result, const cli_command* cli);

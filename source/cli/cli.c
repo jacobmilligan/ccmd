@@ -327,32 +327,32 @@ int cli_find_option(const cli_command* command, const char* option_name, const i
     return -1;
 }
 
-cli_parse_status cli_parse_command(const int argc, char* const* argv, cli_result* result, cli_missing_options* missing, const cli_command* command)
+cli_parse_status cli_parse_command(const int argc, char* const* argv, cli_result* program_result, const cli_command* command_info, cli_command_result* command_result, cli_missing_options* missing)
 {
-    assert(result->commands_count < CLI_ARG_MAX);
+    assert(program_result->commands_count < CLI_ARG_MAX);
 
-    struct cli_formatter error_fmt = { .buffer = result->error_message, .buffer_capacity = CLI_ERROR_MAX };
+    struct cli_formatter error_fmt = { .buffer = program_result->error_message, .buffer_capacity = CLI_ERROR_MAX };
 
-    // add a new parsed command
-    cli_command_result* cmd_result = &result->commands[result->commands_count++];
-    cmd_result->nargs_parsed = 0;
-    cmd_result->options_parsed = 0;
-    cmd_result->positionals_parsed = 0;
-    cmd_result->argc = argc;
-    cmd_result->argv = argv;
+    // set defaults
+    command_result->nargs_parsed = 0;
+    command_result->options_parsed = 0;
+    command_result->positionals_parsed = 0;
+    command_result->argc = argc;
+    command_result->argv = argv;
+    command_result->execute = NULL;
 
-    cli_generate_help(command, cmd_result);
+    cli_generate_help(command_info, command_result);
 
-    if (cmd_result->argc <= 0)
+    if (command_result->argc <= 0)
     {
         return CLI_PARSE_RESULT_HELP;
     }
 
-    cli_missing_options_init(missing, command);
+    cli_missing_options_init(missing, command_info);
 
-    while (cmd_result->nargs_parsed < cmd_result->argc)
+    while (command_result->nargs_parsed < command_result->argc)
     {
-        const char* arg = cmd_result->argv[cmd_result->nargs_parsed++];
+        const char* arg = command_result->argv[command_result->nargs_parsed++];
         const int arg_length = (int)strlen(arg);
 
         // A solitary '--' argument indicates the command line should stop parsing
@@ -394,7 +394,7 @@ cli_parse_status cli_parse_command(const int argc, char* const* argv, cli_result
             }
 
             // find the given option and validate if exists
-            const int option_index = cli_find_option(command, option_name, option_length);
+            const int option_index = cli_find_option(command_info, option_name, option_length);
 
             if (option_index < 0)
             {
@@ -402,63 +402,63 @@ cli_parse_status cli_parse_command(const int argc, char* const* argv, cli_result
                 return CLI_PARSE_RESULT_ERROR;
             }
 
-            const cli_option* option = &command->options.data[option_index];
+            const cli_option* option_info = &command_info->options.data[option_index];
 
-            for (int i = 0; i < option->nargs; ++i)
+            for (int i = 0; i < option_info->nargs; ++i)
             {
                 // fail if we exceeded argc but haven't parsed all the required option arguments
-                if (cmd_result->nargs_parsed >= cmd_result->argc)
+                if (command_result->nargs_parsed >= command_result->argc)
                 {
                     cli_fmt(
                         &error_fmt,
                         "option -%c/--%s expected %d argument%s",
-                        option->short_name,
-                        option->long_name,
-                        option->nargs,
-                        option->nargs <= 1 ? "" : "s" // plural on argument/s
+                        option_info->short_name,
+                        option_info->long_name,
+                        option_info->nargs,
+                        option_info->nargs <= 1 ? "" : "s" // plural on argument/s
                     );
 
                     return false;
                 }
 
                 // next arg
-                ++cmd_result->nargs_parsed;
+                ++command_result->nargs_parsed;
             }
 
             // option parse success - add a new parsed one
-            cli_parsed_option* option_result = &cmd_result->options[cmd_result->options_parsed++];
-            option_result->name = option->long_name;
-            option_result->nargs = option->nargs;
-            option_result->args = option->nargs != 0 ? &argv[cmd_result->options_parsed] : NULL;
+            cli_parsed_option* option_result = &command_result->options[command_result->options_parsed++];
+            option_result->name = option_info->long_name;
+            option_result->nargs = option_info->nargs;
+            option_result->args = option_info->nargs != 0 ? &argv[command_result->options_parsed] : NULL;
 
             // Remove from list of missing required options
-            if (option->required)
+            if (option_info->required)
             {
-                cli_missing_options_mark_parsed(missing, option);
+                cli_missing_options_mark_parsed(missing, option_info);
             }
         }
         else
         {
             // otherwise parse as positional or subcommand (depending on how many positionals have already been consumed)
-            if (cmd_result->positionals_parsed < command->positionals.count)
+            if (command_result->positionals_parsed < command_info->positionals.count)
             {
-                cmd_result->positionals[cmd_result->positionals_parsed++] = arg;
+                command_result->positionals[command_result->positionals_parsed++] = arg;
             }
             else
             {
                 // if all the positionals have been parsed then this is either a subcommand or invalid
-                const cli_command* subcommand = NULL;
-                for (int i = 0; i < command->subcommands.count; ++i)
+                const cli_command* subcommand_info = NULL;
+                for (int i = 0; i < command_info->subcommands.count; ++i)
                 {
-                    if (strncmp(arg, command->subcommands.data[i].name, arg_length) == 0)
+                    if (strncmp(arg, command_info->subcommands.data[i].name, arg_length) == 0)
                     {
-                        subcommand = &command->subcommands.data[i];
+                        subcommand_info = &command_info->subcommands.data[i];
                         break;
                     }
                 }
 
                 // invalid - no such command
-                if (subcommand == NULL)
+                if (subcommand_info == NULL)
                 {
                     cli_fmt(&error_fmt, "unrecognized argument: %s", arg);
                     return CLI_PARSE_RESULT_ERROR;
@@ -472,13 +472,15 @@ cli_parse_status cli_parse_command(const int argc, char* const* argv, cli_result
                 }
 
                 // valid subcommand - recursively parse. Since positionals take precedence over subcommands this is fine
-                assert(result->commands_count < CLI_ARG_MAX);
-                result->execute = subcommand->execute;
-                cmd_result->subcommand = &result->commands[result->commands_count];
+                assert(program_result->commands_count < CLI_ARG_MAX);
+                cli_command_result* subcommand = &program_result->commands[program_result->commands_count++];
+                program_result->executed_command = program_result->commands_count;
+                command_result->execute = command_info->execute;
+                command_result->subcommand = subcommand;
 
-                const int subcommand_argc = argc - cmd_result->nargs_parsed;
-                char* const* subcommand_argv = argv + cmd_result->nargs_parsed;
-                return cli_parse_command(subcommand_argc, subcommand_argv, result, missing, subcommand);
+                const int subcommand_argc = argc - command_result->nargs_parsed;
+                char* const* subcommand_argv = argv + command_result->nargs_parsed;
+                return cli_parse_command(subcommand_argc, subcommand_argv, program_result, subcommand_info, subcommand, missing);
             }
         }
     }
@@ -500,7 +502,7 @@ void cli_parse(const int argc, char* const* argv, cli_result* result, const cli_
     result->commands_count = 0;
     result->is_error = false;
     result->is_help = false;
-    result->execute = NULL;
+    result->executed_command = 0;
 
     int subcommand_argc = argc;
     char* const* subcommand_argv = argv;
@@ -536,7 +538,12 @@ void cli_parse(const int argc, char* const* argv, cli_result* result, const cli_
     }
 
     cli_missing_options missing;
-    const cli_parse_status status = cli_parse_command(subcommand_argc, subcommand_argv, result, &missing, cli);
+    cli_command_result* command = &result->commands[result->commands_count++];
+    const cli_parse_status status = cli_parse_command(subcommand_argc, subcommand_argv, result, cli, command, &missing);
+
+    assert(result->commands_count > 0);
+    result->usage = result->commands[0].usage;
+
     switch (status)
     {
         case CLI_PARSE_RESULT_ERROR:
@@ -568,10 +575,16 @@ const cli_parsed_option* cli_get_option(const cli_command_result* result, const 
 
 int cli_execute(const cli_result* result)
 {
-    if (result->execute == NULL)
+    assert(result->executed_command >= 0);
+    assert(result->commands_count >= 0);
+    assert(result->executed_command <= result->commands_count);
+
+    const cli_command_result* command_result = &result->commands[result->executed_command];
+
+    if (command_result->execute == NULL)
     {
-        return 0; // EXIT_SUCCESS
+        return 0;
     }
 
-    return result->execute(result);
+    return command_result->execute(command_result);
 }
