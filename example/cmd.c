@@ -25,21 +25,21 @@ int main(int argc, char** argv)
         .positionals = CLI_POSITIONALS(
         {
             .name = "my-command",
-            .description = "a positional command"
+            .help = "a positional command"
         }),
 
         .options = CLI_OPTIONS(
         {
             .short_name = 'i',
             .long_name = "input",
-            .description = "gets input",
+            .help = "gets input",
             .nargs = 1,
             .required = false
         },
         {
             .short_name = 'o',
             .long_name = "output",
-            .description = "outputs to file",
+            .help = "outputs to file",
             .nargs = 1,
             .required = true
         }),

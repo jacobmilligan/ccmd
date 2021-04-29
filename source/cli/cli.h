@@ -30,14 +30,14 @@ struct cli_result;
 typedef struct cli_positional
 {
     const char* name;
-    const char* description;
+    const char* help;
 } cli_positional;
 
 typedef struct cli_option
 {
     char        short_name;
     const char* long_name;
-    const char* description;
+    const char* help;
     bool        required;
     int         nargs;
 } cli_option;
@@ -54,7 +54,7 @@ typedef struct cli_command
     cli_positional_array    positionals;
     cli_option_array        options;
     cli_command_array       subcommands;
-    cli_command_callback  execute;
+    cli_command_callback    execute;
 } cli_command;
 
 typedef struct cli_parsed_option

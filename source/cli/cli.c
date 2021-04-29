@@ -249,7 +249,7 @@ void cli_generate_help(const cli_command* command, cli_command_result* result)
         {
             cli_fmt(&usage_formatter, "  %s", command->positionals.data[pos_idx].name);
             cli_fmt_spaces_arg(&usage_formatter, help_spacing, command->positionals.data[pos_idx].name);
-            cli_fmt(&usage_formatter, "%s\n", command->positionals.data[pos_idx].description);
+            cli_fmt(&usage_formatter, "%s\n", command->positionals.data[pos_idx].help);
         }
     }
 
@@ -274,7 +274,7 @@ void cli_generate_help(const cli_command* command, cli_command_result* result)
             cli_fmt(&usage_formatter, "--%s", command->options.data[opt_idx].long_name);
             cli_fmt_spaces_opt(&usage_formatter, help_spacing, &command->options.data[opt_idx]);
             // Write help string
-            cli_fmt(&usage_formatter, "%s%s\n", command->options.data[opt_idx].description);
+            cli_fmt(&usage_formatter, "%s%s\n", command->options.data[opt_idx].help);
         }
     }
 
