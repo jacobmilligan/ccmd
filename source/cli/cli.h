@@ -19,6 +19,10 @@
         .data = (TYPE[]) { __VA_ARGS__}                                                 \
     }
 
+#define CLI_OPTIONS(...) CLI_ARGS(cli_option, __VA_ARGS__)
+#define CLI_POSITIONALS(...) CLI_ARGS(cli_positional, __VA_ARGS__)
+#define CLI_SUBCOMMANDS(...) CLI_ARGS(cli_command, __VA_ARGS__)
+
 #define CLI_DEFINE_ARRAY(T) struct T; typedef struct T##_array { int count; const struct T* data; } T##_array;
 
 struct cli_result;

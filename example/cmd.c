@@ -19,48 +19,45 @@ int cb(const cli_result* result)
 int main(int argc, char** argv)
 {
     cli_result result;
-    cli_parse(argc, argv, &result, &(cli_command)
+    cli_parse(argc, argv, &result, &(cli_command) {
+        .name = "test-app",
+
+        .positionals = CLI_POSITIONALS(
         {
-            .name = "test-app",
+            .name = "my-command",
+            .description = "a positional command"
+        }),
 
-            .positionals = CLI_ARGS(cli_positional,
-                {
-                    .name = "my-command", .description = "a positional command"
-                }
-            ),
+        .options = CLI_OPTIONS(
+        {
+            .short_name = 'i',
+            .long_name = "input",
+            .description = "gets input",
+            .nargs = 1,
+            .required = false
+        },
+        {
+            .short_name = 'o',
+            .long_name = "output",
+            .description = "outputs to file",
+            .nargs = 1,
+            .required = true
+        }),
 
+        .subcommands = CLI_SUBCOMMANDS(
+        {
+            .name = "do-thing",
+            .execute = cb,
             .options = CLI_ARGS(cli_option,
                 {
-                    .short_name = 'i',
-                    .long_name = "input",
-                    .description = "gets input",
-                    .nargs = 1,
+                    .short_name = 'a',
+                    .long_name = "always",
+                    .nargs = 0,
                     .required = false
-                },
-                {
-                    .short_name = 'o',
-                    .long_name = "output",
-                    .description = "outputs to file",
-                    .nargs = 1,
-                    .required = true
-                }
-            ),
-
-            .subcommands = CLI_ARGS(cli_command,
-                {
-                    .name = "do-thing",
-                    .execute = cb,
-                    .options = CLI_ARGS(cli_option,
-                        {
-                            .short_name = 'a',
-                            .long_name = "always",
-                            .nargs = 0,
-                            .required = false
-                        }
-                    )
                 }
             )
-        });
+        })
+    });
 
     if (result.is_error)
     {
