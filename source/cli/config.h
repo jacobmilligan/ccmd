@@ -7,6 +7,13 @@
 
 #pragma once
 
+#define CLI_EXPAND(x) x
+#define CLI_STRINGIFY(x) #x
+#define CLI_CONCAT_BASE(x, y) x##y
+#define CLI_CONCAT(x, y) CLI_CONCAT_BASE(x, y)
+
+#define CLI_UNUSED(x) (void)(x)
+
 #define CLI_OS_MACOS 0
 #define CLI_OS_WINDOWS 0
 #define CLI_OS_LINUX 0
@@ -54,6 +61,34 @@
     #undef CLI_COMPILER_UNKNOWN
     #define CLI_COMPILER_UNKNOWN 0
 #endif // CLI_COMPILER_CLANG == 1 || CLI_COMPILER_GCC == 1 || CLI_COMPILER_MSVC == 1
+
+#if CLI_COMPILER_CLANG == 1
+    #define CLI_PUSH_WARNING                _Pragma("clang diagnostic push")
+    #define CLI_POP_WARNING                 _Pragma("clang diagnostic pop")
+    #define CLI_DISABLE_WARNING_CLANG(W)    _Pragma(CLI_STRINGIFY(clang diagnostic ignored W))
+#elif CLI_COMPILER_GCC == 1
+    #define CLI_PUSH_WARNING                _Pragma("GCC diagnostic push")
+    #define CLI_POP_WARNING                 _Pragma("GCC diagnostic pop")
+    #define CLI_DISABLE_WARNING_GCC(W)      _Pragma(CLI_STRINGIFY(GCC diagnostic ignored # W))
+#elif CLI_COMPILER_MSVC == 1
+// Displays type information, calling signature etc. much like __PRETTY_FUNCTION__
+    // see: https://msdn.microsoft.com/en-us/library/b0084kay.aspx
+    #define CLI_PUSH_WARNING                    __pragma(warning( push ))
+    #define CLI_POP_WARNING                     __pragma(warning( pop ))
+    #define CLI_DISABLE_WARNING_MSVC(W)         __pragma(warning( disable: W ))
+#endif // CLI_COMPILER_*
+
+#ifndef CLI_DISABLE_WARNING_CLANG
+    #define CLI_DISABLE_WARNING_CLANG(W)
+#endif // CLI_DISABLE_WARNING_CLANG
+
+#ifndef CLI_DISABLE_WARNING_GCC
+    #define CLI_DISABLE_WARNING_GCC(W)
+#endif // CLI_DISABLE_WARNING_GCC
+
+#ifndef CLI_DISABLE_WARNING_MSVC
+    #define CLI_DISABLE_WARNING_MSVC(W)
+#endif // CLI_DISABLE_WARNING_MSVC
 
 /*
  * Processor architecture - only works for x86_64 detection.

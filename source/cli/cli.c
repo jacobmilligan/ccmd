@@ -181,17 +181,15 @@ void cli_missing_mark_parsed_option(cli_parser* parser, const cli_option* option
         }
 
         // swap and pop the last item if i is not last
-        if (i == parser->missing.option_count - 1)
+        if (i < parser->missing.option_count - 1)
         {
-            --parser->missing.option_count;
-            break;
-        }
-        else
-        {
-            const cli_option* tmp = parser->missing.options[parser->missing.option_count];
+            const cli_option* tmp = parser->missing.options[parser->missing.option_count - 1];
             parser->missing.options[parser->missing.option_count] = parser->missing.options[i];
             parser->missing.options[i] = tmp;
         }
+
+        --parser->missing.option_count;
+        break;
     }
 }
 
@@ -205,17 +203,15 @@ void cli_missing_mark_parsed_positional(cli_parser* parser, const char* position
         }
 
         // swap and pop the last item if i is not last
-        if (i == parser->missing.positional_count - 1)
+        if (i < parser->missing.positional_count - 1)
         {
-            --parser->missing.positional_count;
-            break;
-        }
-        else
-        {
-            const cli_positional* tmp = parser->missing.positionals[parser->missing.positional_count];
+            const cli_positional* tmp = parser->missing.positionals[parser->missing.positional_count - 1];
             parser->missing.positionals[parser->missing.positional_count] = parser->missing.positionals[i];
             parser->missing.positionals[i] = tmp;
         }
+
+        --parser->missing.positional_count;
+        break;
     }
 }
 
@@ -693,8 +689,11 @@ void cli_parse(const int argc, char* const* argv, cli_result* result, const cli_
         }
 
         // assign the program name and then try and remove the extension if one exists
+CLI_PUSH_WARNING
+        CLI_DISABLE_WARNING_GCC(-Wstringop-overflow)
         const int full_exe_name = CLI_MIN(strlen(exe_name), CLI_PROGRAM_NAME_MAX);
         strncpy(result->program_name, exe_name, full_exe_name);
+CLI_POP_WARNING
 
         // get the length of the default program name up to the extension and remove it, i.e. program.exe -> program
         // adjust the command line to exclude the program path
