@@ -20,7 +20,7 @@ int main(int argc, char** argv)
 {
     cli_result result;
     cli_parse(argc, argv, &result, &(cli_command) {
-//        .name = "test-app",
+        .name = "test-app",
 
         .positionals = CLI_POSITIONALS(
         {

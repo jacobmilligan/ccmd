@@ -1,6 +1,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#ifndef CLI_PROGRAM_NAME_MAX
+    #define CLI_PROGRAM_NAME_MAX 256
+#endif // CLI_PROGRAM_NAME_MAX
+
 #ifndef CLI_ARG_MAX
     #define CLI_ARG_MAX 64
 #endif // CLI_ARG_MAX
@@ -13,10 +17,12 @@
     #define CLI_ERROR_MAX 4096
 #endif // CLI_ERROR_MAX
 
-#define CLI_ARGS(TYPE, ...) \
-    {                                                                                   \
-        .count = sizeof((TYPE[]) {__VA_ARGS__}) / sizeof((TYPE[]) {__VA_ARGS__})[0],    \
-        .data = (TYPE[]) { __VA_ARGS__}                                                 \
+#define CLI_ARRAY_SIZE(ARRAY) (sizeof((ARRAY)) / sizeof((ARRAY)[0]))
+
+#define CLI_ARGS(TYPE, ...)                                 \
+    {                                                       \
+        .count = CLI_ARRAY_SIZE(((TYPE[]) {__VA_ARGS__})),  \
+        .data = (TYPE[]) { __VA_ARGS__}                     \
     }
 
 #define CLI_OPTIONS(...) CLI_ARGS(cli_option, __VA_ARGS__)
@@ -83,7 +89,8 @@ typedef struct cli_command_result
 
 typedef struct cli_result
 {
-    const char*             program_name;
+    char                    program_name[CLI_PROGRAM_NAME_MAX];
+    const char*             program_path;
     const char*             usage;
     char                    error_message[CLI_ERROR_MAX];
 

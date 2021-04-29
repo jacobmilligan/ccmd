@@ -67,7 +67,7 @@
     #define CLI_ARCH_BITS 32
 #endif // Processor arch
 
-#define CLI_ROUND_UP(SIZE, ALIGNMENT) ((SIZE + ALIGNMENT - 1) & ~(ALIGNMENT - 1))
+#define CLI_ROUND_UP(SIZE, ALIGNMENT) (((SIZE) + (ALIGNMENT) - 1) & ~((ALIGNMENT) - 1))
 
 // Must be a macro because even a FORCE_INLINE function may possibly free the memory
 #if CLI_OS_WINDOWS == 1
@@ -79,5 +79,5 @@
 #ifdef __cplusplus
     #define CLI_ALLOCA_ARRAY(T, SIZE) (static_cast<T*>(CLI_ALLOCA(sizeof(T) * SIZE, alignof(T))))
 #else
-    #define CLI_ALLOCA_ARRAY(T, SIZE) ((T*)CLI_ALLOCA(sizeof(T) * SIZE, _Alignof(T)))
+    #define CLI_ALLOCA_ARRAY(T, SIZE) ((T*)CLI_ALLOCA(sizeof(T) * (SIZE), _Alignof(T)))
 #endif // __cplusplus
