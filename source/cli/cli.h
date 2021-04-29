@@ -31,10 +31,13 @@
 
 #define CLI_DEFINE_ARRAY(T) struct T; typedef struct T##_array { int count; const struct T* data; } T##_array;
 
+#define CLI_0_OR_MORE INT32_MIN
+#define CLI_N_OR_MORE(N) ((N) >= 0 ? CLI_0_OR_MORE : (CLI_0_OR_MORE + (N)))
+
 struct cli_result;
 struct cli_command_result;
 
-typedef int(*cli_command_callback)(const struct cli_command_result* command);
+typedef int(*cli_command_callback)(const struct cli_result* program, const struct cli_command_result* command);
 
 typedef struct cli_positional
 {
@@ -47,8 +50,8 @@ typedef struct cli_option
     char        short_name;
     const char* long_name;
     const char* help;
+    int32_t         nargs;
     bool        required;
-    int         nargs;
 } cli_option;
 
 CLI_DEFINE_ARRAY(cli_positional)
@@ -66,18 +69,19 @@ typedef struct cli_command
 
 typedef struct cli_parsed_option
 {
-    const char*     name;
+    const char*     long_name;
+    char            short_name;
     char* const*    args;
-    int             nargs;
+    int32_t         nargs;
 } cli_parsed_option;
 
 typedef struct cli_command_result
 {
-    int                                 argc;
+    int32_t                             argc;
     char* const*                        argv;
-    int                                 nargs_parsed;
-    int                                 positionals_parsed;
-    int                                 options_parsed;
+    int32_t                             nargs_parsed;
+    int32_t                             positionals_parsed;
+    int32_t                             options_parsed;
 
     char                                usage[CLI_HELP_MAX];
 
@@ -97,13 +101,17 @@ typedef struct cli_result
     bool                    is_error;
     bool                    is_help;
 
-    int                     commands_count;
-    int                     executed_command;
+    int32_t                 commands_count;
+    int32_t                 executed_command;
     cli_command_result      commands[CLI_ARG_MAX];
 } cli_result;
 
 void cli_parse(const int argc, char* const* argv, cli_result* result, const cli_command* cli);
 
+int cli_execute(const cli_result* result);
+
 const cli_parsed_option* cli_get_option(const cli_command_result* result, const char* option_long_name);
 
-int cli_execute(const cli_result* result);
+const cli_parsed_option* cli_get_option_short(const cli_command_result* result, const char option_short_name);
+
+const cli_parsed_option* cli_get_program_option(const cli_result* result, const char* option_long_name);
