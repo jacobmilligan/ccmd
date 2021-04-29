@@ -181,7 +181,7 @@ void cli_missing_options_format(const cli_missing_options* missing, struct cli_f
  *
  *****************************
  */
-void cli_generate_help(const cli_command* command, cli_command_result* result)
+void cli_generate_help(const char* default_program_name, const cli_command* command, cli_command_result* result)
 {
     struct cli_formatter usage_formatter = { .buffer_capacity = CLI_HELP_MAX, .buffer = result->usage };
 
@@ -190,6 +190,20 @@ void cli_generate_help(const cli_command* command, cli_command_result* result)
     if (command->name != NULL)
     {
         cli_fmt(&usage_formatter, "%s ", command->name);
+    }
+    else
+    {
+        const int program_name_length = (int)strlen(default_program_name);
+        int last_dot = program_name_length;
+        for (int i = 0; i < program_name_length; ++i)
+        {
+            if (default_program_name[i] == '.')
+            {
+                last_dot = i;
+            }
+        }
+
+        cli_fmt(&usage_formatter, "%.*s ", last_dot, default_program_name);
     }
 
     int help_spacing = 0;
@@ -341,7 +355,7 @@ cli_parse_status cli_parse_command(const int argc, char* const* argv, cli_result
     command_result->argv = argv;
     command_result->execute = NULL;
 
-    cli_generate_help(command_info, command_result);
+    cli_generate_help(program_result->program_name, command_info, command_result);
 
     if (command_result->argc <= 0)
     {
@@ -498,7 +512,6 @@ cli_parse_status cli_parse_command(const int argc, char* const* argv, cli_result
 void cli_parse(const int argc, char* const* argv, cli_result* result, const cli_command* cli)
 {
     // defaults for the result
-    result->program_name = NULL;
     result->commands_count = 0;
     result->is_error = false;
     result->is_help = false;
