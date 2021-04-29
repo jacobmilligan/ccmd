@@ -47,11 +47,13 @@ typedef struct cli_formatter
     int32_t length;
 } cli_formatter;
 
-typedef struct cli_missing_options
+typedef struct cli_missing_args
 {
-    int32_t             count;
-    const cli_option*   data[CLI_ARG_MAX];
-} cli_missing_options;
+    int32_t                 option_count;
+    int32_t                 positional_count;
+    const cli_option*       options[CLI_ARG_MAX];
+    const cli_positional*   positionals[CLI_ARG_MAX];
+} cli_missing_args;
 
 typedef struct cli_element
 {
@@ -65,7 +67,7 @@ typedef struct cli_parser
     const cli_command*  command_info;
     cli_command_result* command_result;
     cli_formatter       error_formatter;
-    cli_missing_options missing;
+    cli_missing_args    missing;
 } cli_parser;
 
 
@@ -151,38 +153,68 @@ int cli_fmt_spaces_opt(struct cli_formatter* formatter, const int min, const cli
  */
 void cli_missing_options_init(cli_parser* parser)
 {
-    parser->missing.count = 0;
+    parser->missing.option_count = 0;
+    parser->missing.positional_count = 0;
 
     for (int i = 0; i < parser->command_info->options.count; ++i)
     {
         if (parser->command_info->options.data[i].required)
         {
-            assert(parser->missing.count < CLI_ARG_MAX);
-            parser->missing.data[parser->missing.count++] = &parser->command_info->options.data[i];
+            assert(parser->missing.option_count < CLI_ARG_MAX);
+            parser->missing.options[parser->missing.option_count++] = &parser->command_info->options.data[i];
         }
+    }
+
+    for (int i = 0; i < parser->command_info->positionals.count; ++i)
+    {
+        parser->missing.positionals[parser->missing.positional_count++] = &parser->command_info->positionals.data[i];
     }
 }
 
-void cli_missing_options_mark_parsed(cli_parser* parser, const cli_option* option)
+void cli_missing_mark_parsed_option(cli_parser* parser, const cli_option* option)
 {
-    for (int i = 0; i < parser->missing.count; ++i)
+    for (int i = 0; i < parser->missing.option_count; ++i)
     {
-        if (option != parser->missing.data[i])
+        if (option != parser->missing.options[i])
         {
             continue;
         }
 
         // swap and pop the last item if i is not last
-        if (i == parser->missing.count - 1)
+        if (i == parser->missing.option_count - 1)
         {
-            --parser->missing.count;
+            --parser->missing.option_count;
             break;
         }
         else
         {
-            const cli_option* tmp = parser->missing.data[parser->missing.count];
-            parser->missing.data[parser->missing.count] = parser->missing.data[i];
-            parser->missing.data[i] = tmp;
+            const cli_option* tmp = parser->missing.options[parser->missing.option_count];
+            parser->missing.options[parser->missing.option_count] = parser->missing.options[i];
+            parser->missing.options[i] = tmp;
+        }
+    }
+}
+
+void cli_missing_mark_parsed_positional(cli_parser* parser, const char* positional)
+{
+    for (int i = 0; i < parser->missing.positional_count; ++i)
+    {
+        if (strcmp(positional, parser->missing.positionals[i]->name) != 0)
+        {
+            continue;
+        }
+
+        // swap and pop the last item if i is not last
+        if (i == parser->missing.positional_count - 1)
+        {
+            --parser->missing.positional_count;
+            break;
+        }
+        else
+        {
+            const cli_positional* tmp = parser->missing.positionals[parser->missing.positional_count];
+            parser->missing.positionals[parser->missing.positional_count] = parser->missing.positionals[i];
+            parser->missing.positionals[i] = tmp;
         }
     }
 }
@@ -190,10 +222,23 @@ void cli_missing_options_mark_parsed(cli_parser* parser, const cli_option* optio
 cli_parse_status cli_report_missing(cli_parser* parser)
 {
     cli_fmt(&parser->error_formatter, "missing required options:");
-    for (int i = 0; i < parser->missing.count; ++i)
+    int remaining = parser->missing.option_count + parser->missing.positional_count;
+
+    for (int i = 0; i < parser->missing.positional_count; ++i)
     {
-        cli_fmt(&parser->error_formatter, " -%c/--%s", parser->missing.data[i]->short_name, parser->missing.data[i]->long_name);
-        if (i < parser->missing.count - 1)
+        cli_fmt(&parser->error_formatter, " %s", parser->missing.positionals[i]->name);
+        --remaining;
+        if (remaining > 0)
+        {
+            cli_fmt(&parser->error_formatter, ",");
+        }
+    }
+
+    for (int i = 0; i < parser->missing.option_count; ++i)
+    {
+        cli_fmt(&parser->error_formatter, " -%c/--%s", parser->missing.options[i]->short_name, parser->missing.options[i]->long_name);
+        --remaining;
+        if (remaining > 0)
         {
             cli_fmt(&parser->error_formatter, ",");
         }
@@ -425,17 +470,11 @@ cli_parse_status cli_parse_command(const int argc, char* const* argv, cli_result
     parser->command_result->execute = parser->command_info->execute;
     parser->command_result->subcommand = NULL;
 
-    cli_generate_help(parser, program_result->program_name);
-
-    if (argc <= 0)
-    {
-        return CLI_PARSE_RESULT_HELP;
-    }
-
-    cli_missing_options_init(parser);
-
     const cli_command* command_info = parser->command_info;
     cli_command_result* command_result = parser->command_result;
+
+    cli_generate_help(parser, program_result->program_name);
+    cli_missing_options_init(parser);
 
     while (command_result->nargs_parsed < command_result->argc)
     {
@@ -534,13 +573,14 @@ cli_parse_status cli_parse_command(const int argc, char* const* argv, cli_result
                 // Remove from list of missing required options
                 if (option_info->required)
                 {
-                    cli_missing_options_mark_parsed(parser, option_info);
+                    cli_missing_mark_parsed_option(parser, option_info);
                 }
             }
             case CLI_ELEMENT_POSITIONAL:
             {
                 // just add this to the positional array
                 command_result->positionals[command_result->positionals_parsed++] = element.value;
+                cli_missing_mark_parsed_positional(parser, element.value);
                 break;
             }
             case CLI_ELEMENT_SUBCOMMAND:
@@ -564,7 +604,7 @@ cli_parse_status cli_parse_command(const int argc, char* const* argv, cli_result
                 }
 
                 // ensure all required options were found before moving to a subparser
-                if (parser->missing.count > 0)
+                if (parser->missing.option_count > 0 || parser->missing.positional_count > 0)
                 {
                     return cli_report_missing(parser);
                 }
@@ -587,6 +627,11 @@ cli_parse_status cli_parse_command(const int argc, char* const* argv, cli_result
                 return cli_parse_command(subcommand_argc, subcommand_argv, program_result, parser);
             }
         }
+    }
+
+    if (parser->missing.option_count > 0 || parser->missing.positional_count > 0)
+    {
+        return cli_report_missing(parser);
     }
 
     return CLI_PARSE_RESULT_PARSED;
