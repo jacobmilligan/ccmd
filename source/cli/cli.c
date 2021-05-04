@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <assert.h>
+#include <stdlib.h>
 
 
 #if CLI_OS_WINDOWS == 1
@@ -22,52 +23,65 @@
 
 #define CLI_HELP_MIN_COLS 16
 
-typedef enum cli_parse_status
-{
-    CLI_PARSE_RESULT_PARSED,
-    CLI_PARSE_RESULT_ERROR,
-    CLI_PARSE_RESULT_HELP
-} cli_parse_status;
+#define CLI_MAX(X, Y) ((X) >= (Y) ? (X) : (Y))
+#define CLI_MIN(X, Y) ((X) < (Y) ? (X) : (Y))
+#define CLI_ERROR_KEY_CATEGORY(KEY) ((KEY) & ((1 << 16) - 1))
+#define CLI_ERROR_KEY_ARG_TYPE(KEY) ((KEY) >> 16)
+#define CLI_ERROR_KEY(CATEGORY, ARG_TYPE) ((CATEGORY) | ((ARG_TYPE) << 16))
 
-typedef enum cli_element_type
+typedef enum cli_argument_type
 {
-    CLI_ELEMENT_SHORT_OPTION,
-    CLI_ELEMENT_LONG_OPTION,
-    CLI_ELEMENT_POSITIONAL,
-    CLI_ELEMENT_SUBCOMMAND,
-    CLI_ELEMENT_DELIMITER,
-    CLI_ELEMENT_INVALID
-} cli_element_type;
+    CLI_ARGUMENT_OPTION,
+    CLI_ARGUMENT_OPTION_N_OR_MORE,
+    CLI_ARGUMENT_POSITIONAL,
+    CLI_ARGUMENT_SUBCOMMAND,
+    CLI_ARGUMENT_INVALID
+} cli_argument_type;
+
+typedef enum cli_token_type
+{
+    CLI_TOKEN_SHORT_OPTION,
+    CLI_TOKEN_LONG_OPTION,
+    CLI_TOKEN_POSITIONAL,
+    CLI_TOKEN_SUBCOMMAND,
+    CLI_TOKEN_DELIMITER,
+    CLI_TOKEN_INVALID
+} cli_token_type;
+
+typedef struct cli_token
+{
+    cli_token_type  type;
+    const char*     value;
+    int32_t         length;
+} cli_token;
 
 typedef struct cli_formatter
 {
-    int32_t buffer_capacity;
-    char*   buffer;
-
-    int32_t length;
+    int32_t                     buffer_capacity;
+    int32_t                     length;
+    char*                       buffer;
 } cli_formatter;
 
-typedef struct cli_missing_args
+typedef struct cli_error
 {
-    int32_t                 option_count;
-    int32_t                 positional_count;
-    const cli_option*       options[CLI_ARG_MAX];
-    const cli_positional*   positionals[CLI_ARG_MAX];
-} cli_missing_args;
+    uint32_t    key;
+    int32_t     int32;
+    char        char8;
+    const char* str;
+} cli_error;
 
-typedef struct cli_element
+typedef struct cli_error_list
 {
-    cli_element_type    type;
-    const char*         value;
-    int32_t             length;
-} cli_element;
+    int32_t     count;
+    cli_error   data[CLI_ARG_MAX];
+} cli_error_list;
 
 typedef struct cli_parser
 {
-    const cli_command*  command_info;
-    cli_command_result* command_result;
-    cli_formatter       error_formatter;
-    cli_missing_args    missing;
+    const cli_command**     command_infos;
+    cli_command_result*     command_result;
+    cli_result*             program_result;
+    cli_error_list*         errors;
 } cli_parser;
 
 
@@ -78,9 +92,6 @@ typedef struct cli_parser
  *
  **************************
  */
-#define CLI_MAX(X, Y) ((X) >= (Y) ? (X) : (Y))
-#define CLI_MIN(X, Y) ((X) < (Y) ? (X) : (Y))
-
 int cli_option_display_length(const cli_option* opt)
 {
     int size = 2; // 2 extra for '--'
@@ -95,6 +106,62 @@ int cli_option_display_length(const cli_option* opt)
     return size;
 }
 
+cli_parsed_args* add_option(cli_parser* parser)
+{
+    const int index = parser->program_result->option_count;
+    assert(index < CLI_ARG_MAX - 1);
+
+    ++parser->program_result->option_count;
+    ++parser->command_result->options.count;
+
+    if (parser->command_result->options.data == NULL)
+    {
+        parser->command_result->options.data = &parser->program_result->options[index];
+    }
+
+    return &parser->program_result->options[index];
+}
+
+void cli_add_error(cli_error_list* errors, const cli_error_category category, const enum cli_argument_type arg_type, const char char8, const char* str, const int32_t int32)
+{
+    if (errors->count >= CLI_ARRAY_SIZE(errors->data))
+    {
+        fprintf(stderr, "too many errors were generated\n");
+        return;
+    }
+
+    cli_error* stored = &errors->data[errors->count++];
+    stored->key = CLI_ERROR_KEY(category, arg_type);
+    stored->char8 = char8;
+    stored->str = str;
+    stored->int32 = int32;
+}
+
+void cli_remove_error(cli_error_list* errors, const cli_error_category category, const enum cli_argument_type arg_type, const char char8, const char* str)
+{
+    const uint32_t key = CLI_ERROR_KEY(category, arg_type);
+    for (int i = 0; i < errors->count; ++i)
+    {
+        const cli_error* error = &errors->data[i];
+        if (error->key != key
+            || error->char8 != char8
+            || (str == NULL) != (error->str == NULL)
+            || strcmp(error->str, str) != 0)
+        {
+            continue;
+        }
+
+        // found the error - swap the last with this error and decrement
+        if (i < errors->count - 1)
+        {
+            memcpy(&errors->data[i], &errors->data[errors->count - 1], sizeof(cli_error));
+        }
+
+        --errors->count;
+        break;
+    }
+}
+
 /*
  **************************
  *
@@ -102,145 +169,207 @@ int cli_option_display_length(const cli_option* opt)
  *
  **************************
  */
-int cli_fmt(struct cli_formatter* formatter, const char* fmt, ...)
+int cli_fmt_vsnprintf(struct cli_formatter* formatter, const char* format, va_list args)
 {
-    va_list args;
-        va_start(args, fmt);
+    char* dst = formatter->buffer + formatter->length;
+    const int dst_size = formatter->buffer_capacity - formatter->length;
 
-    int count = vsnprintf(formatter->buffer + formatter->length, formatter->buffer_capacity - formatter->length, fmt, args);
+    int count = vsnprintf(dst, dst_size, format, args);
     if (count > 0)
     {
         formatter->length += count;
     }
 
-        va_end(args);
+    return count;
+}
+
+int cli_fmt(struct cli_formatter* formatter, const char* format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    const int count = cli_fmt_vsnprintf(formatter, format, args);
+    va_end(args);
+    return count;
+}
+
+int cli_fmt_putc(struct cli_formatter* formatter, const char c)
+{
+    if (formatter->length >= formatter->buffer_capacity)
+    {
+        return 0;
+    }
+
+    formatter->buffer[formatter->length++] = c;
+    if (formatter->length < formatter->buffer_capacity)
+    {
+        formatter->buffer[formatter->length] = '\0';
+    }
+    return 1;
+}
+
+int cli_fmt_puts(struct cli_formatter* formatter, const char* string)
+{
+    if (string == NULL)
+    {
+        return 0;
+    }
+
+    const char* ptr = string;
+    while (*ptr != '\0' && formatter->length < formatter->buffer_capacity)
+    {
+        formatter->buffer[formatter->length] = *ptr;
+        ++formatter->length;
+        ++ptr;
+    }
+
+    if (formatter->length < formatter->buffer_capacity)
+    {
+        formatter->buffer[formatter->length] = '\0';
+    }
+
+    return (int)(ptr - string);
+}
+
+int cli_fmt_put_option_name(struct cli_formatter* formatter, const char short_name, const char* long_name)
+{
+    int count = 0;
+
+    if (short_name != '\0')
+    {
+        count += cli_fmt_putc(formatter, '-');
+        count += cli_fmt_putc(formatter, short_name);
+    }
+    if (short_name != '\0' && long_name != NULL)
+    {
+        count += cli_fmt_putc(formatter, '/');
+    }
+    if (long_name != NULL)
+    {
+        count += cli_fmt_puts(formatter, "--");
+        count += cli_fmt_puts(formatter, long_name);
+    }
 
     return count;
 }
 
-int cli_fmt_spaces_base(struct cli_formatter* formatter, const int min, const int label_length)
+int cli_fmt_spaces_base(struct cli_formatter* formatter, const int column_size, const int label_length)
 {
-    const int spaces = min - label_length;
-
-    for (int i = 0; i < spaces; ++i)
-    {
-        const int format_count = cli_fmt(formatter, " ");
-        if (format_count <= 0)
-        {
-            return CLI_MAX(0, i - 1);
-        }
-    }
-
+    const int spaces = CLI_MIN(column_size - label_length, formatter->buffer_capacity - formatter->length);
+    memset(formatter->buffer + formatter->length, ' ', spaces);
+    formatter->length += spaces;
+    formatter->buffer[formatter->length] = '\0';
     return spaces;
 }
 
-int cli_fmt_spaces_arg(struct cli_formatter* formatter, const int min, const char* name)
+int cli_fmt_spaces_arg(struct cli_formatter* formatter, const int column_size, const char* name)
 {
-    return cli_fmt_spaces_base(formatter, min, (int)strlen(name));
+    return cli_fmt_spaces_base(formatter, column_size, (int)strlen(name));
 }
 
-int cli_fmt_spaces_opt(struct cli_formatter* formatter, const int min, const cli_option* option)
+int cli_fmt_spaces_opt(struct cli_formatter* formatter, const int column_size, const cli_option* option)
 {
-    return cli_fmt_spaces_base(formatter, min, cli_option_display_length(option));
+    return cli_fmt_spaces_base(formatter, column_size, cli_option_display_length(option));
 }
 
-/*
- **************************
- *
- * Missing options API
- *
- **************************
- */
-void cli_missing_options_init(cli_parser* parser)
+static int cli_qsort_error_comp(const void* lhs, const void* rhs)
 {
-    parser->missing.option_count = 0;
-    parser->missing.positional_count = 0;
-
-    for (int i = 0; i < parser->command_info->options.count; ++i)
-    {
-        if (parser->command_info->options.data[i].required)
-        {
-            assert(parser->missing.option_count < CLI_ARG_MAX);
-            parser->missing.options[parser->missing.option_count++] = &parser->command_info->options.data[i];
-        }
-    }
-
-    for (int i = 0; i < parser->command_info->positionals.count; ++i)
-    {
-        parser->missing.positionals[parser->missing.positional_count++] = &parser->command_info->positionals.data[i];
-    }
+    const cli_error* lhs_error = (const cli_error*)lhs;
+    const cli_error* rhs_error = (const cli_error*)rhs;
+    return CLI_ERROR_KEY_CATEGORY(lhs_error->key) < CLI_ERROR_KEY_CATEGORY(rhs_error->key);
 }
 
-void cli_missing_mark_parsed_option(cli_parser* parser, const cli_option* option)
+int cli_sort_and_report_errors(cli_formatter* formatter, cli_error_list* errors)
 {
-    for (int i = 0; i < parser->missing.option_count; ++i)
+    static const char* fmt_token_name[CLI_ARGUMENT_INVALID + 1] = {
+        "option",       // CLI_ARGUMENT_OPTION
+        "option",       // CLI_ARGUMENT_OPTION_N_OR_MORE
+        "positional",   // CLI_ARGUMENT_POSITIONAL
+        "subcommand",   // CLI_ARGUMENT_SUBCOMMAND
+        "<#INVALID>",   // CLI_ARGUMENT_INVALID
+    };
+
+    // sort into error categories
+    qsort(errors, errors->count, sizeof(const cli_error*), cli_qsort_error_comp);
+
+    const int old_formatter_length = formatter->length;
+    int category_progress[CLI_ERROR_CATEGORY_COUNT][2] = { { 0, 0 } };
+    for (int i = 0; i < errors->count; ++i)
     {
-        if (option != parser->missing.options[i])
-        {
-            continue;
-        }
-
-        // swap and pop the last item if i is not last
-        if (i < parser->missing.option_count - 1)
-        {
-            const cli_option* tmp = parser->missing.options[parser->missing.option_count - 1];
-            parser->missing.options[parser->missing.option_count] = parser->missing.options[i];
-            parser->missing.options[i] = tmp;
-        }
-
-        --parser->missing.option_count;
-        break;
-    }
-}
-
-void cli_missing_mark_parsed_positional(cli_parser* parser, const char* positional)
-{
-    for (int i = 0; i < parser->missing.positional_count; ++i)
-    {
-        if (strcmp(positional, parser->missing.positionals[i]->name) != 0)
-        {
-            continue;
-        }
-
-        // swap and pop the last item if i is not last
-        if (i < parser->missing.positional_count - 1)
-        {
-            const cli_positional* tmp = parser->missing.positionals[parser->missing.positional_count - 1];
-            parser->missing.positionals[parser->missing.positional_count] = parser->missing.positionals[i];
-            parser->missing.positionals[i] = tmp;
-        }
-
-        --parser->missing.positional_count;
-        break;
-    }
-}
-
-cli_parse_status cli_report_missing(cli_parser* parser)
-{
-    cli_fmt(&parser->error_formatter, "missing required options:");
-    int remaining = parser->missing.option_count + parser->missing.positional_count;
-
-    for (int i = 0; i < parser->missing.positional_count; ++i)
-    {
-        cli_fmt(&parser->error_formatter, " %s", parser->missing.positionals[i]->name);
-        --remaining;
-        if (remaining > 0)
-        {
-            cli_fmt(&parser->error_formatter, ",");
-        }
+        ++category_progress[CLI_ERROR_KEY_CATEGORY(errors->data[i].key)][1];
     }
 
-    for (int i = 0; i < parser->missing.option_count; ++i)
+    for (int i = 0; i < errors->count; ++i)
     {
-        cli_fmt(&parser->error_formatter, " -%c/--%s", parser->missing.options[i]->short_name, parser->missing.options[i]->long_name);
-        --remaining;
-        if (remaining > 0)
+        const cli_error* error = &errors->data[i];
+        const cli_error_category category = CLI_ERROR_KEY_CATEGORY(error->key);
+        const cli_argument_type arg_type = CLI_ERROR_KEY_ARG_TYPE(error->key);
+        const int index_in_category = category_progress[category][0];
+        const int last_index_in_category = category_progress[category][1] - 1;
+
+        category_progress[category][0]++;
+
+        switch (category)
         {
-            cli_fmt(&parser->error_formatter, ",");
+            case CLI_ERROR_CATEGORY_MISSING_REQUIRED_ARGUMENT:
+            {
+                if (index_in_category == 0)
+                {
+                    cli_fmt_puts(formatter, "the following arguments are required: ");
+                }
+
+                if (arg_type == CLI_TOKEN_SHORT_OPTION || arg_type == CLI_TOKEN_LONG_OPTION)
+                {
+                    cli_fmt_put_option_name(formatter, error->char8, error->str);
+                }
+                else
+                {
+                    cli_fmt_puts(formatter, error->str);
+                }
+
+                cli_fmt_puts(formatter, index_in_category < last_index_in_category ? ", " : "\n");
+                break;
+            }
+            case CLI_ERROR_CATEGORY_INVALID_NARGS:
+            {
+                cli_fmt_puts(formatter, "option ");
+                cli_fmt_put_option_name(formatter, error->char8, error->str);
+
+                if (arg_type == CLI_ARGUMENT_OPTION_N_OR_MORE)
+                {
+                    cli_fmt(formatter, " expected at least %d argument", error->int32);
+                }
+                else
+                {
+                    cli_fmt(formatter, " expected %d argument", error->int32);
+                }
+
+                if (error->int32 > 1)
+                {
+                    cli_fmt_putc(formatter, 's'); // plural nargs
+                }
+
+                cli_fmt_putc(formatter, '\n');
+                break;
+            }
+            case CLI_ERROR_CATEGORY_UNRECOGNIZED_ARGUMENT:
+            {
+                cli_fmt(formatter, "unrecognized %s: %s\n", fmt_token_name[arg_type], error->str);
+                break;
+            }
+            case CLI_ERROR_CATEGORY_INTERNAL:
+            {
+                cli_fmt(formatter, "internal error - %s\n", error->str);
+                break;
+            }
+            default:
+            {
+                fprintf(stderr, "invalid error type: %d\n", arg_type);
+                exit(1);
+            }
         }
     }
 
-    return CLI_PARSE_RESULT_ERROR;
+    return formatter->length - old_formatter_length;
 }
 
 /*
@@ -251,120 +380,132 @@ cli_parse_status cli_report_missing(cli_parser* parser)
  *
  *****************************
  */
-void cli_generate_help(const cli_parser* parser, const char* default_program_name)
+void cli_generate_usage(cli_formatter* usage_formatter, const int32_t command_count, const cli_command* const* commands)
 {
-    struct cli_formatter usage_formatter = { .buffer_capacity = CLI_HELP_MAX, .buffer = parser->command_result->usage };
-    const cli_command* command = parser->command_info;
+    cli_fmt(usage_formatter, "usage: ");
 
-    cli_fmt(&usage_formatter, "usage: ");
-
-    if (command->name != NULL)
-    {
-        cli_fmt(&usage_formatter, "%s ", command->name);
-    }
-    else
-    {
-        cli_fmt(&usage_formatter, "%s ", default_program_name);
-    }
-
+    const cli_command* executed_command = commands[command_count - 1];
     int help_spacing = 0;
 
-    if (command->options.count > 0)
+    for (int i = 0; i < command_count; ++i)
     {
-        // Print out all the required options
-        for (int opt_idx = 0; opt_idx < command->options.count; ++opt_idx)
-        {
-            // calculate max spacing for help strings
-            help_spacing = CLI_MAX(help_spacing, cli_option_display_length(&command->options.data[opt_idx]));
+        const cli_command* command = commands[i];
 
-            if (command->options.data[opt_idx].required)
+        if (command->name != NULL)
+        {
+            cli_fmt(usage_formatter, "%s ", command->name);
+        }
+
+        if (command->options.count > 0)
+        {
+            // Print out all the required options
+            for (int opt_idx = 0; opt_idx < command->options.count; ++opt_idx)
             {
-                const char* long_name = command->options.data[opt_idx].long_name;
-                const int nargs = command->options.data[opt_idx].nargs;
-                cli_fmt(&usage_formatter, "--%s %s", long_name, nargs != 0 ? "ARGS " : "");
+                if (command->options.data[opt_idx].required)
+                {
+                    const char* long_name = command->options.data[opt_idx].long_name;
+                    const int nargs = command->options.data[opt_idx].nargs;
+                    cli_fmt(usage_formatter, "--%s %s", long_name, nargs != 0 ? "ARGS " : "");
+                }
+
+                if (command == executed_command)
+                {
+                    // calculate max spacing for help strings
+                    help_spacing = CLI_MAX(help_spacing, cli_option_display_length(&command->options.data[opt_idx]));
+                }
+            }
+
+            cli_fmt(usage_formatter, "[options...] ");
+        }
+
+        if (command->positionals.count > 0)
+        {
+            for (int pos_idx = 0; pos_idx < command->positionals.count; ++pos_idx)
+            {
+                // print out positionals with specific amount of spacing, i.e
+                // `program positional1 positional2 ...`
+                cli_fmt(usage_formatter, "%s ", command->positionals.data[pos_idx].name);
+
+                if (command == executed_command)
+                {
+                    // calculate max spacing for help strings
+                    help_spacing = CLI_MAX(help_spacing, (int)strlen(command->positionals.data[pos_idx].name));
+                }
             }
         }
 
-        cli_fmt(&usage_formatter, "[options...] ");
-    }
-
-    if (command->positionals.count > 0)
-    {
-        for (int pos_idx = 0; pos_idx < command->positionals.count; ++pos_idx)
+        if (command == executed_command)
         {
-            // calculate max spacing for help strings
-            help_spacing = CLI_MAX(help_spacing, (int)strlen(command->positionals.data[pos_idx].name));
-
-            // print out positionals with specific amount of spacing, i.e
-            // `program positional1 positional2 ...`
-            cli_fmt(&usage_formatter, "%s ", command->positionals.data[pos_idx].name);
+            if (command->subcommands.count > 0)
+            {
+                cli_fmt(usage_formatter, "<command> ");
+                for (int sc = 0; sc < command->subcommands.count; ++sc)
+                {
+                    // calculate max spacing for help strings
+                    help_spacing = CLI_MAX(help_spacing, (int)strlen(command->subcommands.data[sc].name));
+                }
+            }
         }
     }
 
-    if (command->subcommands.count > 0)
+    if (executed_command->help != NULL)
     {
-        cli_fmt(&usage_formatter, "<command> ");
-        for (int i = 0; i < command->subcommands.count; ++i)
-        {
-            // calculate max spacing for help strings
-            help_spacing = CLI_MAX(help_spacing, (int)strlen(command->subcommands.data[i].name));
-        }
+        cli_fmt(usage_formatter, "\n\n%s\n", executed_command->help);
     }
 
     help_spacing = CLI_MAX(CLI_HELP_MIN_COLS, help_spacing + 4); // at least 4 spaces between the arg and the desc
 
-
     // output the positional args
-    if (command->positionals.count > 0)
+    if (executed_command->positionals.count > 0)
     {
-        cli_fmt(&usage_formatter, "\n\nArguments:\n");
+        cli_fmt(usage_formatter, "\n\nArguments:\n");
 
         // print out positionals with specific amount of spacing, i.e `positional1  help string`
-        for (int pos_idx = 0; pos_idx < command->positionals.count; ++pos_idx)
+        for (int pos_idx = 0; pos_idx < executed_command->positionals.count; ++pos_idx)
         {
-            cli_fmt(&usage_formatter, "  %s", command->positionals.data[pos_idx].name);
-            cli_fmt_spaces_arg(&usage_formatter, help_spacing, command->positionals.data[pos_idx].name);
-            cli_fmt(&usage_formatter, "%s\n", command->positionals.data[pos_idx].help);
+            cli_fmt(usage_formatter, "  %s", executed_command->positionals.data[pos_idx].name);
+            cli_fmt_spaces_arg(usage_formatter, help_spacing, executed_command->positionals.data[pos_idx].name);
+            cli_fmt(usage_formatter, "%s\n", executed_command->positionals.data[pos_idx].help);
         }
     }
 
-    cli_fmt(&usage_formatter, "\nOptions:\n  -h, --help");
-    cli_fmt_spaces_arg(&usage_formatter, help_spacing, "-h, --help");
-    cli_fmt(&usage_formatter, "Returns this help message\n");
+    cli_fmt(usage_formatter, "\nOptions:\n  -h, --help");
+    cli_fmt_spaces_arg(usage_formatter, help_spacing, "-h, --help");
+    cli_fmt(usage_formatter, "Returns this help message\n");
 
-    if (command->options.count > 0)
+    if (executed_command->options.count > 0)
     {
         // print out options, i.e `-o, --option1  help string`
-        for (int opt_idx = 0; opt_idx < command->options.count; ++opt_idx)
+        for (int opt_idx = 0; opt_idx < executed_command->options.count; ++opt_idx)
         {
-            cli_fmt(&usage_formatter, "  ");
+            cli_fmt(usage_formatter, "  ");
 
             // Write out short name
-            if (command->options.data[opt_idx].short_name != '\0')
+            if (executed_command->options.data[opt_idx].short_name != '\0')
             {
-                cli_fmt(&usage_formatter, "-%c, ", command->options.data[opt_idx].short_name);
+                cli_fmt(usage_formatter, "-%c, ", executed_command->options.data[opt_idx].short_name);
             }
 
             // Write long name
-            cli_fmt(&usage_formatter, "--%s", command->options.data[opt_idx].long_name);
-            cli_fmt_spaces_opt(&usage_formatter, help_spacing, &command->options.data[opt_idx]);
+            cli_fmt(usage_formatter, "--%s", executed_command->options.data[opt_idx].long_name);
+            cli_fmt_spaces_opt(usage_formatter, help_spacing, &executed_command->options.data[opt_idx]);
             // Write help string
-            cli_fmt(&usage_formatter, "%s%s\n", command->options.data[opt_idx].help);
+            cli_fmt(usage_formatter, "%s\n", executed_command->options.data[opt_idx].help);
         }
     }
 
     // generate just a list of names for subcommands
-    if (command->subcommands.count > 0)
+    if (executed_command->subcommands.count > 0)
     {
-        cli_fmt(&usage_formatter, "\nCommands:\n");
+        cli_fmt(usage_formatter, "\nCommands:\n  ");
 
-        for (int cmd_idx = 0; cmd_idx < command->subcommands.count; ++cmd_idx)
+        for (int cmd_idx = 0; cmd_idx < executed_command->subcommands.count; ++cmd_idx)
         {
-            cli_fmt(&usage_formatter, "  %s", command->subcommands.data[cmd_idx].name);
+            cli_fmt(usage_formatter, "%s", executed_command->subcommands.data[cmd_idx].name);
 
-            if (cmd_idx < command->subcommands.count - 1)
+            if (cmd_idx < executed_command->subcommands.count - 1)
             {
-                cli_fmt(&usage_formatter, ", ");
+                cli_fmt(usage_formatter, ", ");
             }
         }
     }
@@ -379,11 +520,11 @@ void cli_generate_help(const cli_parser* parser, const char* default_program_nam
  *
  *****************************
  */
-cli_element cli_parse_element(const cli_parser* parser, const char* arg)
+cli_token cli_parse_element(const cli_parser* parser, const char* arg)
 {
     if (arg == NULL)
     {
-        return (cli_element) { .type = CLI_ELEMENT_INVALID };
+        return (cli_token) { .type = CLI_TOKEN_INVALID };
     }
 
     int leading_dashes = 0;
@@ -398,36 +539,37 @@ cli_element cli_parse_element(const cli_parser* parser, const char* arg)
 
     if (length == 0)
     {
-        return (cli_element) { .type = CLI_ELEMENT_INVALID };
+        return (cli_token) { .type = CLI_TOKEN_INVALID };
     }
 
     if (leading_dashes == 1)
     {
-        return (cli_element) { .type = CLI_ELEMENT_SHORT_OPTION, .value = arg + 1, .length = 1 };
+        return (cli_token) { .type = CLI_TOKEN_SHORT_OPTION, .value = arg + 1, .length = 1 };
     }
 
     if (leading_dashes == 2)
     {
         // A solitary '--' argument indicates the command line should stop parsing
-        const cli_element_type type = length == 2 ? CLI_ELEMENT_DELIMITER : CLI_ELEMENT_LONG_OPTION;
-        return (cli_element) { .type = type, .value = arg + 2, .length = length - 2 };
+        const cli_token_type type = length == 2 ? CLI_TOKEN_DELIMITER : CLI_TOKEN_LONG_OPTION;
+        return (cli_token) { .type = type, .value = arg + 2, .length = length - 2 };
     }
 
     const cli_command_result* command_result = parser->command_result;
-    const cli_command* command_info = parser->command_info;
-    const bool all_positionals_parsed = command_result->positionals_parsed >= command_info->positionals.count;
-    const bool can_parse_subcommand = command_result->subcommand == NULL && command_info->subcommands.count > 0;
+    const cli_command* command_info = parser->command_infos[parser->program_result->commands_count - 1];
+    const cli_command_result* subcommand = &parser->program_result->commands[parser->program_result->commands_count - 1];
+    const bool all_positionals_parsed = command_result->positionals.count >= command_info->positionals.count;
+    const bool has_parsed_subcommands = subcommand > parser->command_result;
 
-    return (cli_element) {
-        .type = (all_positionals_parsed && can_parse_subcommand)  ? CLI_ELEMENT_SUBCOMMAND : CLI_ELEMENT_POSITIONAL,
+    return (cli_token) {
+        .type = (all_positionals_parsed && !has_parsed_subcommands)  ? CLI_TOKEN_SUBCOMMAND : CLI_TOKEN_POSITIONAL,
         .value = arg,
         .length = length
     };
 }
 
-bool cli_compare_option(const cli_element* element, const char expected_short_name, const char* expected_long_name)
+bool cli_compare_option(const cli_token* element, const char expected_short_name, const char* expected_long_name)
 {
-    if (element->type != CLI_ELEMENT_SHORT_OPTION && element->type != CLI_ELEMENT_LONG_OPTION)
+    if (element->type != CLI_TOKEN_SHORT_OPTION && element->type != CLI_TOKEN_LONG_OPTION)
     {
         return false;
     }
@@ -440,7 +582,7 @@ bool cli_compare_option(const cli_element* element, const char expected_short_na
     return strncmp(expected_long_name, element->value, element->length) == 0;
 }
 
-int cli_find_option(const cli_command* command, const cli_element* element)
+int cli_find_option(const cli_command* command, const cli_token* element)
 {
     for (int i = 0; i < command->options.count; ++i)
     {
@@ -453,139 +595,166 @@ int cli_find_option(const cli_command* command, const cli_element* element)
     return -1;
 }
 
-cli_parse_status cli_parse_command(const int argc, char* const* argv, cli_result* program_result, cli_parser* parser)
+cli_status cli_parse_command(const int argc, char* const* argv, cli_parser* parser)
 {
-    assert(program_result->commands_count < CLI_ARG_MAX);
+    assert(parser->program_result->commands_count < CLI_ARG_MAX);
 
-    // set defaults
-    parser->command_result->nargs_parsed = 0;
-    parser->command_result->options_parsed = 0;
-    parser->command_result->positionals_parsed = 0;
-    parser->command_result->argc = argc;
-    parser->command_result->argv = argv;
-    parser->command_result->execute = parser->command_info->execute;
-    parser->command_result->subcommand = NULL;
-
-    const cli_command* command_info = parser->command_info;
+    // get command info
+    const cli_command* command_info = parser->command_infos[parser->program_result->commands_count - 1];
     cli_command_result* command_result = parser->command_result;
 
-    cli_generate_help(parser, program_result->program_name);
-    cli_missing_options_init(parser);
-
-    while (command_result->nargs_parsed < command_result->argc)
+    // setup parser
+    cli_error_list* errors = parser->errors;
+    for (int i = 0; i < command_info->positionals.count && errors->count < CLI_ARRAY_SIZE(errors->data); ++i)
     {
-        const char* arg = command_result->argv[command_result->nargs_parsed++];
-        const cli_element element = cli_parse_element(parser, arg);
-
-        switch (element.type)
+        cli_add_error(errors, CLI_ERROR_CATEGORY_MISSING_REQUIRED_ARGUMENT, CLI_ARGUMENT_POSITIONAL,
+            '\0', command_info->positionals.data[i].name, 1
+        );
+    }
+    for (int i = 0; i < command_info->options.count && errors->count < CLI_ARRAY_SIZE(errors->data); ++i)
+    {
+        if (!command_info->options.data[i].required)
         {
-            case CLI_ELEMENT_INVALID:
+            continue;
+        }
+
+        cli_add_error(errors, CLI_ERROR_CATEGORY_MISSING_REQUIRED_ARGUMENT, CLI_ARGUMENT_OPTION,
+            command_info->options.data[i].short_name,
+            command_info->options.data[i].long_name,
+            command_info->options.data[i].nargs
+        );
+    }
+
+    // setup command defaults
+    command_result->options.count = command_result->positionals.count= 0;
+    command_result->options.data = command_result->options.data = NULL;
+    command_result->run = command_info->run;
+    if (command_info->name != NULL)
+    {
+        command_result->name = command_info->name;
+    }
+
+    int nargs_parsed = 0;
+
+    while (nargs_parsed < argc)
+    {
+        const cli_token token = cli_parse_element(parser, argv[nargs_parsed++]);
+
+        switch (token.type)
+        {
+            case CLI_TOKEN_INVALID:
             {
                 // very dodgy - something went terribly wrong
-                cli_fmt(&parser->error_formatter, "internal error -- invalid argument string pointer");
-                return CLI_PARSE_RESULT_ERROR;
+                cli_add_error(errors, CLI_ERROR_CATEGORY_INTERNAL, CLI_ARGUMENT_INVALID,
+                    '\0', "invalid argument string detected", 0
+                );
+                return CLI_STATUS_ERROR;
             }
-            case CLI_ELEMENT_DELIMITER:
+            case CLI_TOKEN_DELIMITER:
             {
                 // detected ' -- ' : game over, man
-                return CLI_PARSE_RESULT_PARSED;
+                return CLI_STATUS_SUCCESS;
             }
-            case CLI_ELEMENT_SHORT_OPTION:
-            case CLI_ELEMENT_LONG_OPTION:
+            case CLI_TOKEN_SHORT_OPTION:
+            case CLI_TOKEN_LONG_OPTION:
             {
                 // exit early and show help if this is the implicit -h/--help option
-                if (cli_compare_option(&element, 'h', "help"))
+                if (cli_compare_option(&token, 'h', "help"))
                 {
-                    return CLI_PARSE_RESULT_HELP;
+                    return CLI_STATUS_HELP;
                 }
 
                 // find the given option and validate if exists
-                const int option_index = cli_find_option(parser->command_info, &element);
+                const int option_index = cli_find_option(command_info, &token);
 
                 if (option_index < 0)
                 {
-                    cli_fmt(&parser->error_formatter, "unrecognized option %s", element.value);
-                    return CLI_PARSE_RESULT_ERROR;
+                    cli_add_error(errors, CLI_ERROR_CATEGORY_UNRECOGNIZED_ARGUMENT, CLI_ARGUMENT_OPTION,
+                        '\0', token.value, 0
+                    );
+                    return CLI_STATUS_ERROR;
                 }
 
                 // parse all the arguments for the option
-                const cli_option* option_info = &parser->command_info->options.data[option_index];
-                const int preparsed_nargs = parser->command_result->nargs_parsed;
+                const cli_option* option_info = &command_info->options.data[option_index];
+                const int preparsed_nargs = nargs_parsed;
+
+                // Remove from list of missing required options
+                if (option_info->required)
+                {
+                    cli_remove_error(errors, CLI_ERROR_CATEGORY_MISSING_REQUIRED_ARGUMENT, CLI_ARGUMENT_OPTION, option_info->short_name, option_info->long_name);
+                }
 
                 // normal, restricted narg range [0, nargs]
                 if (option_info->nargs >= 0)
                 {
                     // fail if we will exceed argc without being able to parse all the required option arguments
-                    if (CLI_MIN(parser->command_result->argc, option_info->nargs) < option_info->nargs)
+                    if (CLI_MIN(argc, option_info->nargs) < option_info->nargs)
                     {
-                        cli_fmt(&parser->error_formatter,
-                            "option -%c/--%s expected %d argument%s",
+                        cli_add_error(errors, CLI_ERROR_CATEGORY_INVALID_NARGS, CLI_ARGUMENT_OPTION,
                             option_info->short_name,
                             option_info->long_name,
-                            option_info->nargs,
-                            option_info->nargs > 1 ? "s" : "" // plural on argument/s
+                            option_info->nargs
                         );
-
-                        return CLI_PARSE_RESULT_ERROR;
+                        return CLI_STATUS_ERROR;
                     }
 
                     // otherwise we can safely skip past all options args
-                    parser->command_result->nargs_parsed += option_info->nargs;
+                    nargs_parsed += option_info->nargs;
                 }
                 else
                 {
                     // special narg range [1, argc]
-                    for (int i = parser->command_result->nargs_parsed; i < parser->command_result->argc; ++i)
+                    for (int i = nargs_parsed; i < argc; ++i)
                     {
                         // we can't just verify argc we have to actually search through for the next '-/--'
-                        if (*parser->command_result->argv[parser->command_result->nargs_parsed] == '-')
+                        if (*(argv[nargs_parsed]) == '-')
                         {
                             break;
                         }
-                        ++parser->command_result->nargs_parsed;
+                        ++nargs_parsed;
                     }
 
                     const int min_nargs_required = option_info->nargs - CLI_0_OR_MORE; // repeated nargs is some distance from CLI_0_OR_MORE
-                    if (parser->command_result->nargs_parsed - preparsed_nargs < min_nargs_required)
+                    if (nargs_parsed - preparsed_nargs < min_nargs_required)
                     {
-                        cli_fmt(&parser->error_formatter,
-                            "option -%c/--%s expected at least %d arguments",
+                        cli_add_error(errors, CLI_ERROR_CATEGORY_INVALID_NARGS, CLI_ARGUMENT_OPTION_N_OR_MORE,
                             option_info->short_name,
                             option_info->long_name,
                             min_nargs_required
                         );
-
-                        return CLI_PARSE_RESULT_ERROR;
+                        return CLI_STATUS_ERROR;
                     }
                 }
 
                 // option parse success - add a new parsed one
-                cli_parsed_option* option_result = &parser->command_result->options[parser->command_result->options_parsed++];
+                cli_parsed_args* option_result = add_option(parser);
                 option_result->long_name = option_info->long_name;
                 option_result->short_name = option_info->short_name;
-                option_result->nargs = parser->command_result->nargs_parsed - preparsed_nargs;
-                option_result->args = option_info->nargs != 0 ? &parser->command_result->argv[preparsed_nargs] : NULL;
-
-                // Remove from list of missing required options
-                if (option_info->required)
-                {
-                    cli_missing_mark_parsed_option(parser, option_info);
-                }
+                option_result->nargs = nargs_parsed - preparsed_nargs;
+                option_result->args = option_info->nargs != 0 ? &(argv[preparsed_nargs]) : NULL;
             }
-            case CLI_ELEMENT_POSITIONAL:
+            case CLI_TOKEN_POSITIONAL:
             {
+                if (parser->command_result->positionals.data == NULL)
+                {
+                    parser->command_result->positionals.data = argv + nargs_parsed;
+                }
+
                 // just add this to the positional array
-                command_result->positionals[command_result->positionals_parsed++] = element.value;
-                cli_missing_mark_parsed_positional(parser, element.value);
+                ++parser->command_result->positionals.count;
+
+                // mark required positional as parsed
+                cli_remove_error(errors, CLI_ERROR_CATEGORY_MISSING_REQUIRED_ARGUMENT, CLI_ARGUMENT_POSITIONAL, '\0', token.value);
                 break;
             }
-            case CLI_ELEMENT_SUBCOMMAND:
+            case CLI_TOKEN_SUBCOMMAND:
             {
                 // if all the positionals have been parsed then this is either a subcommand or otherwise it's invalid
                 const cli_command* subcommand_info = NULL;
                 for (int i = 0; i < command_info->subcommands.count; ++i)
                 {
-                    if (strncmp(element.value, command_info->subcommands.data[i].name, element.length) == 0)
+                    if (strncmp(token.value, command_info->subcommands.data[i].name, token.length) == 0)
                     {
                         subcommand_info = &command_info->subcommands.data[i];
                         break;
@@ -595,42 +764,34 @@ cli_parse_status cli_parse_command(const int argc, char* const* argv, cli_result
                 // invalid - no such command
                 if (subcommand_info == NULL)
                 {
-                    cli_fmt(&parser->error_formatter, "unrecognized argument: %s", arg);
-                    return CLI_PARSE_RESULT_ERROR;
+                    cli_add_error(errors, CLI_ERROR_CATEGORY_UNRECOGNIZED_ARGUMENT, CLI_ARGUMENT_SUBCOMMAND,
+                        '\0', token.value, 0
+                    );
                 }
 
                 // ensure all required options were found before moving to a subparser
-                if (parser->missing.option_count > 0 || parser->missing.positional_count > 0)
+                if (errors->count > 0)
                 {
-                    return cli_report_missing(parser);
+                    return CLI_STATUS_ERROR;
                 }
 
                 // valid subcommand - recursively parse. Since positionals take precedence over subcommands this is fine
-                assert(program_result->commands_count < CLI_ARG_MAX);
+                assert(parser->program_result->commands_count < CLI_ARRAY_SIZE(parser->program_result->commands));
 
                 // setup the parser for the next recursive subcommand parse call
-                parser->command_info = subcommand_info;
-                parser->command_result = &program_result->commands[program_result->commands_count++];
-
-                // register the parsed command
-                program_result->executed_command = program_result->commands_count - 1;
-                command_result->execute = command_info->execute;
-                command_result->subcommand = parser->command_result;
+                parser->command_infos[parser->program_result->commands_count] = subcommand_info;
+                parser->command_result = &parser->program_result->commands[parser->program_result->commands_count];
+                ++parser->program_result->commands_count;
 
                 // parse the subcommand
-                const int subcommand_argc = argc - command_result->nargs_parsed;
-                char* const* subcommand_argv = argv + command_result->nargs_parsed;
-                return cli_parse_command(subcommand_argc, subcommand_argv, program_result, parser);
+                const int subcommand_argc = argc - nargs_parsed;
+                char* const* subcommand_argv = argv + nargs_parsed;
+                return cli_parse_command(subcommand_argc, subcommand_argv, parser);
             }
         }
     }
 
-    if (parser->missing.option_count > 0 || parser->missing.positional_count > 0)
-    {
-        return cli_report_missing(parser);
-    }
-
-    return CLI_PARSE_RESULT_PARSED;
+    return errors->count > 0 ? CLI_STATUS_ERROR : CLI_STATUS_SUCCESS;
 }
 
 /*
@@ -640,13 +801,10 @@ cli_parse_status cli_parse_command(const int argc, char* const* argv, cli_result
  *
  *****************************
  */
-void cli_parse(const int argc, char* const* argv, cli_result* result, const cli_command* cli)
+cli_status cli_parse(cli_result* result, const int32_t argc, char* const* argv, const cli_command* cli)
 {
     // defaults for the result
-    result->commands_count = 0;
-    result->is_error = false;
-    result->is_help = false;
-    result->executed_command = 0;
+    memset(result, 0, sizeof(cli_result));
     result->program_path = "";
 
     int subcommand_argc = argc;
@@ -659,7 +817,6 @@ void cli_parse(const int argc, char* const* argv, cli_result* result, const cli_
 
         // Otherwise it's a normal command line
         result->program_path = argv[0];
-        const int program_path_len = (int)strlen(result->program_path);
 
         // adjust command args to skip program name
         subcommand_argc = argc - 1;
@@ -667,11 +824,7 @@ void cli_parse(const int argc, char* const* argv, cli_result* result, const cli_
     }
 
     // use the explicitly-specified name if one was provided
-    if (cli->name != NULL)
-    {
-        strcpy(result->program_name, cli->name);
-    }
-    else if (result->program_path != NULL)
+    if (result->program_path != NULL)
     {
         // otherwise try and discover the program name from the program path if there are any args
         const int program_path_len = (int)strlen(result->program_path);
@@ -712,78 +865,138 @@ CLI_POP_WARNING
             memset(result->program_name + last_dot, 0, CLI_PROGRAM_NAME_MAX - last_dot);
         }
     }
-    else
-    {
-        memset(result->program_name, 0, CLI_PROGRAM_NAME_MAX);
-    }
 
-    const cli_parse_status status = cli_parse_command(subcommand_argc, subcommand_argv, result, &(cli_parser){
+    // Set default name for the program command, otherwise it will be assigned in the parse_command call if cli defines one
+    cli_command_result* program_command = &result->commands[0];
+    program_command->name = result->program_name;
+    result->program_command = program_command;
+
+    const cli_command* parsed_commands[CLI_ARG_MAX] = { cli, NULL };
+    cli_error_list errors = { 0 };
+    const cli_status status = cli_parse_command(subcommand_argc, subcommand_argv, &(cli_parser) {
         .command_result = &result->commands[result->commands_count++],
-        .command_info = cli,
-        .error_formatter = (cli_formatter) { .buffer = result->error_message, .buffer_capacity = CLI_ERROR_MAX }
+        .command_infos = parsed_commands,
+        .program_result = result,
+        .errors = &errors
     });
-
-    assert(result->commands_count > 0);
-    result->usage = result->commands[0].usage;
 
     switch (status)
     {
-        case CLI_PARSE_RESULT_ERROR:
+        case CLI_STATUS_ERROR:
         {
-            result->is_error = true;
+            if (cli->error_buffer.data == NULL)
+            {
+                char error_buffer[4096];
+                cli_formatter formatter = { .buffer_capacity = CLI_ARRAY_SIZE(error_buffer), .buffer = error_buffer };
+                cli_sort_and_report_errors(&formatter, &errors);
+                fprintf(stderr, "%s: error: %s\n", result->program_command->name, error_buffer);
+            }
+            else
+            {
+                cli_formatter formatter = { .buffer_capacity = cli->error_buffer.count, .buffer = cli->error_buffer.data };
+                cli_sort_and_report_errors(&formatter, &errors);
+            }
             break;
         }
-        case CLI_PARSE_RESULT_HELP:
+        case CLI_STATUS_HELP:
         {
-            result->is_help = true;
+            if (cli->usage_buffer.data != NULL)
+            {
+                cli_formatter formatter = { .buffer_capacity = cli->usage_buffer.count, .buffer = cli->usage_buffer.data };
+                cli_generate_usage(&formatter, result->commands_count, parsed_commands);
+            }
+            else
+            {
+                char usage_buffer[4096];
+                cli_formatter formatter = { .buffer_capacity = CLI_ARRAY_SIZE(usage_buffer), .buffer = usage_buffer };
+                cli_generate_usage(&formatter, result->commands_count, parsed_commands);
+                printf("%s\n", usage_buffer);
+            }
             break;
         }
-        default: break;
+        case CLI_STATUS_SUCCESS:
+        {
+            // generate the default program help even if help wasn't requested if a usage buffer is assigned
+            if (cli->usage_buffer.data != NULL)
+            {
+                cli_formatter formatter = { .buffer_capacity = cli->usage_buffer.count, .buffer = cli->usage_buffer.data };
+                cli_generate_usage(&formatter, result->commands_count, parsed_commands);
+            }
+            break;
+        }
+        default:
+        {
+            fprintf(stderr, "%s: internal error - invalid status %d\n", program_command->name, status);
+            exit(1);
+        }
     }
+
+    return status;
 }
 
-const cli_parsed_option* cli_get_option(const cli_command_result* result, const char* option_long_name)
+cli_status cli_run(const cli_result* program)
 {
-    for (int i = 0; i < result->options_parsed; ++i)
+    const cli_command_result* cmd = &program->commands[program->commands_count - 1];
+
+    if (cmd->run == NULL)
     {
-        if (strcmp(result->options[i].long_name, option_long_name) == 0)
+        return CLI_STATUS_SUCCESS;
+    }
+
+    return cmd->run(program->program_command, cmd);
+}
+
+int cli_exit_code(const cli_status status)
+{
+    static int exit_code_table[CLI_STATUS_COUNT] = {
+        0, // CLI_STATUS_SUCCESS
+        1, // CLI_STATUS_ERROR
+        0, // CLI_STATUS_HELP
+    };
+    return exit_code_table[status];
+}
+
+bool cli_has_option(const cli_command_result* command, const char* long_or_short_name)
+{
+    return cli_get_option(command, long_or_short_name) != NULL;
+}
+
+const cli_parsed_args* cli_get_option(const cli_command_result* command, const char* long_or_short_name)
+{
+    const int size = (int)strlen(long_or_short_name);
+
+    if (size == 1)
+    {
+        // compare as short flag, i.e. -h
+        for (int i = 0; i < command->options.count; ++i)
         {
-            return &result->options[i];
+            if (command->options.data[i].short_name == *long_or_short_name)
+            {
+                return &command->options.data[i];
+            }
+        }
+    }
+    else
+    {
+        // compare as long name, i.e. --help
+        for (int i = 0; i < command->options.count; ++i)
+        {
+            if (strcmp(command->options.data[i].long_name, long_or_short_name) == 0)
+            {
+                return &command->options.data[i];
+            }
         }
     }
 
     return NULL;
 }
 
-const cli_parsed_option* cli_get_option_short(const cli_command_result* result, const char option_short_name)
+bool cli_has_positional(const cli_command_result* command, const int32_t position)
 {
-    for (int i = 0; i < result->options_parsed; ++i)
-    {
-        if (result->options[i].short_name == option_short_name)
-        {
-            return &result->options[i];
-        }
-    }
-    return NULL;
+    return cli_get_positional(command, position) != NULL;
 }
 
-const cli_parsed_option* cli_get_program_option(const cli_result* result, const char* option_long_name)
+const char* cli_get_positional(const cli_command_result* command, const int32_t position)
 {
-    return cli_get_option(&result->commands[0], option_long_name);
-}
-
-int cli_execute(const cli_result* result)
-{
-    assert(result->executed_command >= 0);
-    assert(result->commands_count >= 0);
-    assert(result->executed_command <= result->commands_count);
-
-    const cli_command_result* command_result = &result->commands[result->executed_command];
-
-    if (command_result->execute == NULL)
-    {
-        return 0;
-    }
-
-    return command_result->execute(result, command_result);
+    return position < command->positionals.count ? command->positionals.data[position] : NULL;
 }

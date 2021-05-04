@@ -8,6 +8,7 @@
 #pragma once
 
 #define CLI_EXPAND(x) x
+#define CLI_EXPAND_PARENS(...) __VA_ARGS__
 #define CLI_STRINGIFY(x) #x
 #define CLI_CONCAT_BASE(x, y) x##y
 #define CLI_CONCAT(x, y) CLI_CONCAT_BASE(x, y)
@@ -113,6 +114,8 @@
 
 #ifdef __cplusplus
     #define CLI_ALLOCA_ARRAY(T, SIZE) (static_cast<T*>(CLI_ALLOCA(sizeof(T) * SIZE, alignof(T))))
+    #define CLI_STATIC_ASSERT(PRED, MSG) static_assert(PRED, MSG)
 #else
     #define CLI_ALLOCA_ARRAY(T, SIZE) ((T*)CLI_ALLOCA(sizeof(T) * (SIZE), _Alignof(T)))
+    #define CLI_STATIC_ASSERT(PRED, MSG) extern char
 #endif // __cplusplus
