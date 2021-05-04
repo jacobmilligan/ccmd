@@ -6,7 +6,6 @@
  */
 
 #include <cli/cli.h>
-#include <cli/config.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -41,7 +40,7 @@ cli_status print_string(const cli_command_result* program, const cli_command_res
     {
         printf("...\n");
     }
-    return 0;
+    return CLI_STATUS_SUCCESS;
 }
 
 cli_status dump_files(const cli_command_result* program, const cli_command_result* command)
@@ -62,7 +61,7 @@ cli_status dump_files(const cli_command_result* program, const cli_command_resul
         fclose(file);
     }
 
-    return 0;
+    return CLI_STATUS_SUCCESS;
 }
 
 int main(int argc, char** argv)
