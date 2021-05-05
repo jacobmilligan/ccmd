@@ -25,18 +25,22 @@ typedef enum cli_status
     CLI_STATUS_COUNT
 } cli_status;
 
-typedef enum cli_error_category
-{
-    CLI_ERROR_CATEGORY_UNKNOWN,
-    CLI_ERROR_CATEGORY_MISSING_REQUIRED_ARGUMENT,
-    CLI_ERROR_CATEGORY_UNRECOGNIZED_ARGUMENT,
-    CLI_ERROR_CATEGORY_INVALID_NARGS,
-    CLI_ERROR_CATEGORY_INTERNAL,
-    CLI_ERROR_CATEGORY_COUNT
-} cli_error_category;
-
 #define CLI_ARRAY_VIEW_TYPE(T) struct { int32_t count; T* data; } // NOLINT(bugprone-macro-parentheses)
 #define CLI_ARRAY_VIEW(...) { CLI_ARRAY_SIZE((__VA_ARGS__)), __VA_ARGS__ }
+
+typedef struct cli_error
+{
+    uint32_t    key;
+    int32_t     int32;
+    char        char8;
+    const char* str;
+} cli_error;
+
+typedef struct cli_error_buffer
+{
+    int32_t     count;
+    cli_error   data[CLI_ARG_MAX];
+} cli_error_buffer;
 
 typedef struct cli_positional
 {
@@ -61,11 +65,10 @@ typedef struct cli_command
     const char*         help;
 
     // buffers to redirect usage/error messages
-    CLI_ARRAY_VIEW_TYPE(char)
-    usage_buffer;
+    cli_error_buffer*   error_buffer;
 
     CLI_ARRAY_VIEW_TYPE(char)
-    error_buffer;
+    usage_buffer;
 
     CLI_ARRAY_VIEW_TYPE(const cli_positional)
     positionals;
@@ -105,7 +108,6 @@ typedef struct cli_result
     const char*                 program_path;
     int32_t                     option_count;
     int32_t                     commands_count;
-    const cli_command_result*   program_command;
     cli_parsed_args             options[CLI_ARG_MAX];
     cli_command_result          commands[CLI_ARG_MAX];
 } cli_result;
@@ -114,7 +116,7 @@ cli_status cli_parse(cli_result* result, const int32_t argc, char* const* argv, 
 
 cli_status cli_run(const cli_result* program);
 
-int cli_exit_code(const cli_status status);
+cli_status cli_run_all(const cli_result* program);
 
 bool cli_has_positional(const cli_command_result* command, const int32_t position);
 
