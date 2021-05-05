@@ -128,14 +128,19 @@ int main(int argc, char** argv)
 
     if (status != CLI_STATUS_SUCCESS)
     {
-        return cli_exit_code(status);
+        return status == CLI_STATUS_ERROR ? EXIT_FAILURE : EXIT_SUCCESS;
     }
 
-    const bool verbose = cli_get_option(result.program_command, "verbose") != NULL;
+    const bool verbose = cli_get_option(&result.commands[0], "verbose") != NULL;
     if (verbose)
     {
         printf("%s [verbose]: executing program...\n", result.program_name);
     }
 
-    return cli_run(&result);
+    if (cli_run(&result) != CLI_STATUS_SUCCESS)
+    {
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
 }
