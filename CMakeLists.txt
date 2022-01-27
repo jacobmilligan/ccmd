@@ -5,7 +5,7 @@ set(CMAKE_C_STANDARD 99)
 set(CMAKE_CXX_STANDARD 17)
 
 
-add_library(ccmd STATIC config.h ccmd.h ccmd.c)
+add_library(ccmd STATIC ccmd.h ccmd.c)
 if (WIN32)
     set(padding_warnings
             /we4820         # warn about padding at end of structure

@@ -1,15 +1,347 @@
 /*
+ *  cplatform.h
+ *  Collection of macros and utilities for writing cross-platform C/C++ code
+ *
+ *  Copyright (c) 2019 Jacob Milligan. All rights reserved.
+ */
+
+/*
+ **********************
+ *
+ * # Build type setup
+ *
+ **********************
+ */
+#ifndef CPLATFORM_DEBUG
+    #define CPLATFORM_DEBUG 0
+#endif // CPLATFORM_DEBUG
+#ifndef CPLATFORM_RELEASE
+    #define CPLATFORM_RELEASE 0
+#endif // CPLATFORM_RELEASE
+
+/*
+ ******************************************
+ *
+ * # String expansion and token pasting
+ *
+ ******************************************
+ */
+#define CPLATFORM_EXPAND(x) x
+#define CPLATFORM_STRINGIFY(x) #x
+#define CPLATFORM_CONCAT_BASE(x, y) x##y
+#define CPLATFORM_CONCAT(x, y) CPLATFORM_CONCAT_BASE(x, y)
+
+/*
+ ******************************
+ *
+ * # OS platform detection
+ *
+ ******************************
+ */
+#if defined(__APPLE__) && defined(__MACH__)
+#include <TargetConditionals.h>
+    #if TARGET_IPHONE_SIMULATOR == 1
+        #define CPLATFORM_OS_IOS 1
+        #define CPLATFORM_OS_NAME_STRING "iOS Simulator"
+    #elif TARGET_OS_IPHONE == 1
+        #define CPLATFORM_OS_IOS 1
+        #define CPLATFORM_OS_NAME_STRING "iOS"
+    #elif TARGET_OS_MAC == 1
+        #define CPLATFORM_OS_MACOS 1
+        #define CPLATFORM_OS_NAME_STRING "MacOS"
+    #endif // TARGET_*
+#elif defined(__WIN32__) || defined(__WINDOWS__) || defined(_WIN64) || defined(_WIN32) || defined(_WINDOWS) || defined(__TOS_WIN__)
+    #define CPLATFORM_OS_WINDOWS 1
+    #define CPLATFORM_OS_NAME_STRING "Windows"
+#elif defined(__linux__) || defined(__linux) || defined(linux_generic)
+#define CPLATFORM_OS_LINUX 1
+    #define CPLATFORM_OS_NAME_STRING "Linux"
+#elif defined(__ANDROID__)
+    #define CPLATFORM_OS_ANDROID 1
+    #define CPLATFORM_ANDROID_API_LEVEL __ANDROID_API__
+    #define CPLATFORM_OS_NAME_STRING "Android"
+#endif // defined(<platform>)
+
+#if CPLATFORM_OS_LINUX == 1 || CPLATFORM_OS_MACOS == 1 || CPLATFORM_OS_IOS == 1 || CPLATFORM_OS_ANDROID == 1
+    #define CPLATFORM_OS_UNIX 1
+#else
+    #define CPLATFORM_OS_UNIX 0
+#endif //
+
+#ifndef CPLATFORM_OS_MACOS
+    #define CPLATFORM_OS_MACOS 0
+#endif // CPLATFORM_OS_MACOS
+#ifndef CPLATFORM_OS_IOS
+    #define CPLATFORM_OS_IOS 0
+#endif // CPLATFORM_OS_IOS
+#ifndef CPLATFORM_OS_ANDROID
+    #define CPLATFORM_OS_ANDROID 0
+#endif // CPLATFORM_OS_ANDROID
+#ifndef CPLATFORM_OS_WINDOWS
+    #define CPLATFORM_OS_WINDOWS 0
+#endif // CPLATFORM_OS_WINDOWS
+#ifndef CPLATFORM_OS_LINUX
+    #define CPLATFORM_OS_LINUX 0
+#endif // CPLATFORM_OS_LINUX
+
+#ifndef CPLATFORM_OS_NAME_STRING
+    #define CPLATFORM_OS_NAME_STRING "UNKNOWN_OS"
+#endif // ifndef CPLATFORM_OS_NAME_STRING
+
+/*
+ ******************************
+ *
+ * # Compiler detection
+ *
+ ******************************
+ */
+#if defined(__clang__)
+    #define CPLATFORM_COMPILER_CLANG 1
+#elif defined(__GNUC__)
+    #define CPLATFORM_COMPILER_GCC 1
+#elif defined(_MSC_VER)
+    #define CPLATFORM_COMPILER_MSVC 1
+#endif // defined(_MSC_VER)
+
+#ifndef CPLATFORM_COMPILER_CLANG
+    #define CPLATFORM_COMPILER_CLANG 0
+#endif // CPLATFORM_COMPILER_CLANG
+#ifndef CPLATFORM_COMPILER_GCC
+    #define CPLATFORM_COMPILER_GCC 0
+#endif // CPLATFORM_COMPILER_GCC
+#ifndef CPLATFORM_COMPILER_MSVC
+    #define CPLATFORM_COMPILER_MSVC 0
+#endif // CPLATFORM_COMPILER_MSVC
+
+#if CPLATFORM_COMPILER_CLANG == 0  && CPLATFORM_COMPILER_GCC == 0 && CPLATFORM_COMPILER_MSVC == 0
+    #define CPLATFORM_COMPILER_UNKNOWN 1
+#else
+    #define CPLATFORM_COMPILER_UNKNOWN 0
+#endif // CPLATFORM_COMPILER_CLANG == 0 || CPLATFORM_COMPILER_GCC == 0 || CPLATFORM_COMPILER_MSVC == 0
+
+// Clang and GCC shared definitions
+#if CPLATFORM_COMPILER_CLANG == 1 || CPLATFORM_COMPILER_GCC == 1
+#define CPLATFORM_PACKED(n)                       __attribute__((packed, aligned(n)))
+    #define CPLATFORM_FUNCTION_NAME                   __PRETTY_FUNCTION__
+    #define CPLATFORM_FORCE_INLINE inline             __attribute__((always_inline))
+    #define CPLATFORM_PRINTFLIKE(fmt, firstvararg)    __attribute__((__format__ (__printf__, fmt, firstvararg)))
+    #define CPLATFORM_LIKELY(statement)               __builtin_expect((statement), 1)
+    #define CPLATFORM_UNLIKELY(statement)             __builtin_expect((statement), 0)
+    #define CPLATFORM_EXPORT_SYMBOL                   __attribute__ ((visibility("default")))
+#endif // CPLATFORM_COMPILER_CLANG || CPLATFORM_COMPILER_GCC
+
+// Compiler-specific non-shared definitions
+#if CPLATFORM_COMPILER_CLANG == 1
+#define CPLATFORM_PUSH_WARNING                _Pragma("clang diagnostic push")
+    #define CPLATFORM_POP_WARNING                 _Pragma("clang diagnostic pop")
+    #define CPLATFORM_DISABLE_WARNING_CLANG(W)    _Pragma(CPLATFORM_STRINGIFY(clang diagnostic ignored W))
+#elif CPLATFORM_COMPILER_GCC == 1
+#define CPLATFORM_PUSH_WARNING                _Pragma("GCC diagnostic push")
+    #define CPLATFORM_POP_WARNING                 _Pragma("GCC diagnostic pop")
+    #define CPLATFORM_DISABLE_WARNING_GCC(W)      _Pragma(CPLATFORM_STRINGIFY(GCC diagnostic ignored # W))
+#elif CPLATFORM_COMPILER_MSVC == 1
+// Displays type information, calling signature etc. much like __PRETTY_FUNCTION__
+// see: https://msdn.microsoft.com/en-us/library/b0084kay.aspx
+    #define CPLATFORM_FUNCTION_NAME                   __FUNCSIG__
+    #define CPLATFORM_FORCE_INLINE                    __forceinline
+    #define CPLATFORM_PRINTFLIKE(fmt, firstvararg)
+    #define CPLATFORM_PUSH_WARNING                    __pragma(warning( push ))
+    #define CPLATFORM_DISABLE_WARNING_MSVC(w)         __pragma(warning( disable: w ))
+    #define CPLATFORM_POP_WARNING                     __pragma(warning( pop ))
+    #define CPLATFORM_DISABLE_WARNING_CLANG(w)
+    #define CPLATFORM_LIKELY(statement)               (statement)
+    #define CPLATFORM_UNLIKELY(statement)             (statement)
+    #if _WIN64
+    #else
+        #define CPLATFORM_ARCH_32BIT
+    #endif // _WIN64
+#endif // CPLATFORM_COMPILER_*
+
+#ifndef CPLATFORM_DISABLE_WARNING_CLANG
+    #define CPLATFORM_DISABLE_WARNING_CLANG(W)
+#endif // CPLATFORM_DISABLE_WARNING_CLANG
+#ifndef CPLATFORM_DISABLE_WARNING_GCC
+    #define CPLATFORM_DISABLE_WARNING_GCC(W)
+#endif // CPLATFORM_DISABLE_WARNING_GCC
+#ifndef CPLATFORM_DISABLE_WARNING_MSVC
+    #define CPLATFORM_DISABLE_WARNING_MSVC(W)
+#endif // CPLATFORM_DISABLE_WARNING_MSVC
+
+// Define dllexport/import for windows if compiler is MSVC or Clang (supported in clang since at least v3.5)
+#if CPLATFORM_OS_WINDOWS == 1 && CPLATFORM_COMPILER_GCC == 0
+    #ifdef CPLATFORM_DLL
+#undef CPLATFORM_EXPORT_SYMBOL
+        #undef CPLATFORM_IMPORT_SYMBOL
+        #define CPLATFORM_EXPORT_SYMBOL   __declspec(dllexport)
+        #define CPLATFORM_IMPORT_SYMBOL   __declspec(dllimport)
+    #endif // CPLATFORM_DLL
+#endif
+
+#ifndef CPLATFORM_EXPORT_SYMBOL
+    #define CPLATFORM_EXPORT_SYMBOL
+#endif // CPLATFORM_EXPORT_SYMBOL
+#ifndef CPLATFORM_IMPORT_SYMBOL
+    #define CPLATFORM_IMPORT_SYMBOL
+#endif // CPLATFORM_IMPORT_SYMBOL
+
+#if defined(__OBJC__)
+    #define CPLATFORM_OBJC_RELEASE(object) [object release], (object) = nil
+#else
+    #define CPLATFORM_OBJC_RELEASE
+#endif // defined(__OBJC__)
+
+/*
+ **********************************************************************************************************************
+ *
+ * # Processor architecture
+ *
+ * this only works for x86_64 currently.
+ * see: http://nadeausoftware.com/articles/2012/02/c_c_tip_how_detect_processor_type_using_compiler_predefined_macros
+ *
+ **********************************************************************************************************************
+ */
+#if defined(__x86_64__) || defined(_M_X64)
+    #define CPLATFORM_ARCH_64BIT 1
+    #define CPLATFORM_ARCH_BITS 64
+#else
+#define CPLATFORM_ARCH_32BIT 1
+    #define CPLATFORM_ARCH_BITS 32
+#endif // Processor arch
+
+/*
+ ********************************************************
+ *
+ * # Endianness
+ * Only present if supplied by build system so define
+ * as little endian by default if missing
+ *
+ *******************************************************
+ */
+#if !defined(CPLATFORM_BIG_ENDIAN) && !defined(CPLATFORM_LITTLE_ENDIAN)
+    #define CPLATFORM_LITTLE_ENDIAN
+#endif // CPLATFORM_LITTLE_ENDIAN
+
+
+/*
+ **************************************************
+ *
+ * # Assertion configuration
+ * allow user to force assertions on if needed
+ *
+ **************************************************
+ */
+#if CPLATFORM_FORCE_ASSERTIONS_ENABLED == 1
+    #define CPLATFORM_ENABLE_ASSERTIONS CPLATFORM_FORCE_ASSERTIONS_ENABLED
+#else
+    #if CPLATFORM_DEBUG == 1
+        #define CPLATFORM_ENABLE_ASSERTIONS 1
+    #else
+        #define CPLATFORM_ENABLE_ASSERTIONS 0
+    #endif // CPLATFORM_DEBUG == 1
+#endif // !defined(CPLATFORM_FORCE_ASSERTIONS_ENABLED)
+
+/*
+ **************************************************
+ *
+ * # Utilities
+ * these are concise and reused enough across
+ * different files that they warrant being added
+ * to config.h
+ *
+ **************************************************
+ */
+#define CPLATFORM_BEGIN_MACRO_BLOCK do {
+#define CPLATFORM_END_MACRO_BLOCK } while (false)
+#define CPLATFORM_EXPLICIT_SCOPE(x) do { x } while (false)
+
+#define CPLATFORM_MIN(X, Y) ((X) < (Y) ? (X) : (Y))
+#define CPLATFORM_MAX(X, Y) ((X) >= (Y) ? (X) : (Y))
+
+#define CPLATFORM_ROUND_UP(SIZE, ALIGNMENT) (((SIZE) + (ALIGNMENT) - 1) & ~((ALIGNMENT) - 1))
+
+#define CPLATFORM_UNUSED(x) (void)(x)
+
+// Allows using NOLINT for clang-tidy inside macros
+#define CPLATFORM_NOLINT(...) __VA_ARGS__ // NOLINT
+
+#if CPLATFORM_OS_WINDOWS == 1
+    #define CPLATFORM_PATH_SEPARATOR '\\'
+#else
+    #define CPLATFORM_PATH_SEPARATOR '/'
+#endif // CPLATFORM_OS_WINDOWS == 1
+
+// Macros for working with explicit struct padding
+#ifdef __cplusplus
+    #define CPLATFORM_PAD(N) char CPLATFORM_CONCAT(padding, __LINE__)[N] { 0 }
+#else
+    #define CPLATFORM_PAD(N) char CPLATFORM_CONCAT(padding, __LINE__)[N]
+#endif // __cplusplus
+
+#define CPLATFORM_DISABLE_PADDING_WARNINGS CPLATFORM_DISABLE_WARNING_MSVC(4121 4820)
+
+/*
+ **********************************************************************************
+ *
+ * # CPLATFORM_ALLOCA & CPLATFORM_ALLOCA_ARRAY
+ *
+ * Portable alloca implementations - CPLATFORM_ALLOCA_ARRAY
+ * calls CPLATFORM_ALLOCA with size==sizeof(T)*count and alignment==alignof(T)
+ *
+ **********************************************************************************
+ */
+// Must be a macro because even a FORCE_INLINE function may possibly free the memory
+#if CPLATFORM_OS_WINDOWS == 1
+    #define CPLATFORM_ALLOCA(SIZE, ALIGNMENT) (_alloca(CPLATFORM_ROUND_UP(SIZE, ALIGNMENT)))
+#else
+    #define CPLATFORM_ALLOCA(SIZE, ALIGNMENT) (alloca(CPLATFORM_ROUND_UP(SIZE, ALIGNMENT)))
+#endif // CPLATFORM_OS_WINDOWS == 1
+
+#ifdef __cplusplus
+    #define CPLATFORM_ALLOCA_ARRAY(T, SIZE) (static_cast<T*>(CPLATFORM_ALLOCA(sizeof(T) * SIZE, alignof(T))))
+#else
+    #define CPLATFORM_ALLOCA_ARRAY(T, SIZE) ((T*)CPLATFORM_ALLOCA(sizeof(T) * (SIZE), _Alignof(T)))
+#endif // __cplusplus
+
+/*
+ **************
+ *
+ * C++ utils
+ *
+ **************
+ */
+#ifdef __cplusplus
+/*
+ * # CPLATFORM_MOVE
+ *
+ * this is a replacement for std::forward used to avoid having to include <utility> (which also includes <type_traits>)
+ */
+#define CPLATFORM_FORWARD(...) static_cast<decltype(__VA_ARGS__)&&>(__VA_ARGS__)
+
+namespace ccmd {
+    #ifndef CPLATFORM_STATIC_ARRAY_LENGTH_INLINE
+        #define CPLATFORM_STATIC_ARRAY_LENGTH_INLINE
+        template <typename T, int Size>
+        inline constexpr int static_array_length(T(&)[Size])
+        {
+            return Size;
+        }
+    #endif // CPLATFORM_STATIC_ARRAY_LENGTH_INLINE
+} // namespace ccmd
+#endif
+
+
+/*
  *  cmd.c
  *  ccmd
  *
  *  Copyright (c) 2021 Jacob Milligan. All rights reserved.
  */
+
 #ifndef CCMD_IMPLEMENTATION
     #define CCMD_IMPLEMENTATION
 #endif // CCMD_IMPLEMENTATION
 
 #include "ccmd.h"
-#include "config.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -242,7 +574,7 @@ int ccmd_fmt_put_option_name(struct ccmd_formatter* formatter, const char short_
 
 int ccmd_fmt_spaces_base(struct ccmd_formatter* formatter, const int column_size, const int label_length)
 {
-    const int spaces = CCMD_MIN(column_size - label_length, formatter->buffer_capacity - formatter->length);
+    const int spaces = CPLATFORM_MIN(column_size - label_length, formatter->buffer_capacity - formatter->length);
     memset(formatter->buffer + formatter->length, ' ', spaces);
     formatter->length += spaces;
     formatter->buffer[formatter->length] = '\0';
@@ -399,7 +731,7 @@ void ccmd_generate_usage(ccmd_formatter* usage_formatter, const int32_t command_
                 if (command == executed_command)
                 {
                     // calculate max spacing for help strings
-                    help_spacing = CCMD_MAX(help_spacing, ccmd_option_display_length(&command->options.data[opt_idx]));
+                    help_spacing = CPLATFORM_MAX(help_spacing, ccmd_option_display_length(&command->options.data[opt_idx]));
                 }
             }
 
@@ -417,7 +749,7 @@ void ccmd_generate_usage(ccmd_formatter* usage_formatter, const int32_t command_
                 if (command == executed_command)
                 {
                     // calculate max spacing for help strings
-                    help_spacing = CCMD_MAX(help_spacing, (int)strlen(command->positionals.data[pos_idx].name));
+                    help_spacing = CPLATFORM_MAX(help_spacing, (int)strlen(command->positionals.data[pos_idx].name));
                 }
             }
         }
@@ -430,7 +762,7 @@ void ccmd_generate_usage(ccmd_formatter* usage_formatter, const int32_t command_
                 for (int sc = 0; sc < command->subcommands.count; ++sc)
                 {
                     // calculate max spacing for help strings
-                    help_spacing = CCMD_MAX(help_spacing, (int)strlen(command->subcommands.data[sc].name));
+                    help_spacing = CPLATFORM_MAX(help_spacing, (int)strlen(command->subcommands.data[sc].name));
                 }
             }
         }
@@ -441,7 +773,7 @@ void ccmd_generate_usage(ccmd_formatter* usage_formatter, const int32_t command_
         ccmd_fmt(usage_formatter, "\n\n%s", executed_command->help);
     }
 
-    help_spacing = CCMD_MAX(CCMD_HELP_MIN_COLS, help_spacing + 4); // at least 4 spaces between the arg and the desc
+    help_spacing = CPLATFORM_MAX(CCMD_HELP_MIN_COLS, help_spacing + 4); // at least 4 spaces between the arg and the desc
 
     // output the positional args
     if (executed_command->positionals.count > 0)
@@ -684,7 +1016,7 @@ ccmd_status ccmd_parse_command(const int argc, char* const* argv, ccmd_parser* p
                 const int option_args_begin = nargs_parsed;
 
                 // special narg range [1, argc]
-                for (int i = 0; i < CCMD_MIN(max_nargs, argc_remaining); ++i)
+                for (int i = 0; i < CPLATFORM_MIN(max_nargs, argc_remaining); ++i)
                 {
                     // we can't just verify argc we have to actually search through for the next '-/--'
                     if (*(argv[nargs_parsed]) == '-')
@@ -851,7 +1183,7 @@ ccmd_status ccmd_parse(ccmd_result* result, const int32_t argc, char* const* arg
         const char* exe_name = result->program_path;
         for (int i = 0; i < program_path_len; ++i)
         {
-            if (result->program_path[i] != CCMD_PATH_SEPARATOR || i >= program_path_len - 1)
+            if (result->program_path[i] != CPLATFORM_PATH_SEPARATOR || i >= program_path_len - 1)
             {
                 continue;
             }
@@ -860,11 +1192,11 @@ ccmd_status ccmd_parse(ccmd_result* result, const int32_t argc, char* const* arg
         }
 
         // assign the program name and then try and remove the extension if one exists
-CCMD_PUSH_WARNING
-        CCMD_DISABLE_WARNING_GCC(-Wstringop-overflow)
-        const int full_exe_name = CCMD_MIN(strlen(exe_name), CCMD_PROGRAM_NAME_MAX);
+CPLATFORM_PUSH_WARNING
+        CPLATFORM_DISABLE_WARNING_GCC(-Wstringop-overflow)
+        const int full_exe_name = CPLATFORM_MIN(strlen(exe_name), CCMD_PROGRAM_NAME_MAX);
         strncpy(result->program_name, exe_name, full_exe_name);
-CCMD_POP_WARNING
+CPLATFORM_POP_WARNING
 
         // get the length of the default program name up to the extension and remove it, i.e. program.exe -> program
         // adjust the command line to exclude the program path
@@ -890,7 +1222,7 @@ CCMD_POP_WARNING
     result->program_command = program_command;
 
     const int total_subcommand_count = ccmd_count_subcommands(cli);
-    const ccmd_command** parsed_commands = CCMD_ALLOCA_ARRAY(const ccmd_command*, sizeof(const ccmd_command*) * total_subcommand_count);
+    const ccmd_command** parsed_commands = CPLATFORM_ALLOCA_ARRAY(const ccmd_command*, sizeof(const ccmd_command*) * total_subcommand_count);
     parsed_commands[0] = cli;
 
     ccmd_status status = CCMD_STATUS_COUNT;
