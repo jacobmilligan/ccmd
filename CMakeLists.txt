@@ -14,5 +14,6 @@ if (WIN32)
     target_compile_definitions(ccmd PUBLIC -D_CRT_SECURE_NO_WARNINGS)
 endif ()
 
-
-add_subdirectory(example)
+if (DEFINED CCMD_BUILD_EXAMPLES)
+    add_subdirectory(example)
+endif ()
